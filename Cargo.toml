@@ -1,0 +1,22 @@
+[package]
+name = "ui-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "AT-SPI accessibility-to-MCP adapter: query and operate desktop controls semantically"
+
+[dependencies]
+atspi = { version = "0.30.0", default-features = false, features = ["tokio", "proxies", "connection"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "time"] }
+# futures-util only (already in the graph via zbus); the `futures` facade
+# added futures-executor to the build for two re-exported items.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 2
+# Measured (benchmarks/optimization.md): thin LTO + symbol strip = -30% binary
+# (7.83->5.46 MB) for +5% clean-build time; 34/34 + 4/4 tests unchanged.
+lto = "thin"
+strip = "symbols"

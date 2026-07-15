@@ -1,0 +1,60 @@
+{
+  "acceptance_checks": "34/34 checks passed",
+  "acceptance_pass": true,
+  "acceptance_suite_seconds": 52.7,
+  "atspi_action_latency": {
+    "max_ms": 157.96,
+    "median_ms": 156.27,
+    "min_ms": 154.94,
+    "n": 10,
+    "p95_ms": 157.38
+  },
+  "binary_bytes": 7828208,
+  "build_mode": "release",
+  "build_ok": true,
+  "bus_restart_checks": "4/4 checks passed",
+  "bus_restart_pass": true,
+  "bus_restart_seconds": 10.3,
+  "cached_lookup_latency": {
+    "max_ms": 1.77,
+    "median_ms": 1.09,
+    "min_ms": 0.82,
+    "n": 30,
+    "p95_ms": 1.64
+  },
+  "cargo": "cargo 1.97.0 (c980f4866 2026-06-30)",
+  "cargo_dependencies_section": "zbus = { version = \"5\", default-features = false, features = [\"tokio\"] }\ntokio = { version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"io-std\", \"io-util\", \"sync\", \"time\"] }\ntokio-stream = \"0.1\"\nfutures = \"0.3\"\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\natspi = { version = \"0.30.0\", default-features = false, features = [\"tokio\", \"proxies\", \"connection\"] }\n\n[profile.release]\nopt-level = 2",
+  "clean_release_build_seconds": 90.1,
+  "cpus": 6,
+  "date_utc": "2026-07-14T20:46:18.531200+00:00",
+  "dynamic_libs": 3,
+  "idle_rss_kb": 6836,
+  "initial_enumeration_line": "[ui-mcp] connected: enumerated 1 apps, 10 nodes",
+  "initial_enumeration_ms": 28.8,
+  "kernel": "Linux 6.12.95+deb13-cloud-amd64",
+  "mcp_request_latency": {
+    "max_ms": 0.76,
+    "median_ms": 0.3,
+    "min_ms": 0.23,
+    "n": 30,
+    "p95_ms": 0.6
+  },
+  "mem_total_mb": 7947,
+  "peak_rss_kb": 6992,
+  "press_latency_note": "includes intentional 150ms post-action settle in press()",
+  "runtime_dependency_crates": 90,
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "schema": "sir-baseline-v1",
+  "source_files": {
+    "Cargo.toml": "6f180996fed49aec",
+    "src/accessibility.rs": "eca75885c674ea2f",
+    "src/actions.rs": "1b9b9d900ae0dabb",
+    "src/cache.rs": "c110f47c96592890",
+    "src/main.rs": "ef4b1c31c02d6b80",
+    "src/mcp.rs": "5f2c6664c400ad0e",
+    "src/resolver.rs": "1a80d81ac8d0473a",
+    "src/types.rs": "15d89d09296e2641"
+  },
+  "source_sha256": "9b34056458c0e47b2bf4b84625ad8ebd890e7a100d6df55cc72139c2e5dbad0d",
+  "startup_to_initialize_ms": 29.2
+}

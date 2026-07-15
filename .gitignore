@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Packaging outputs (built by scripts/package-deb.sh; distribute via Releases)
+/dist/*.deb
+
+# Benchmark checkpoint/snapshot archives (large binaries; the .json/.md records
+# in benchmarks/ are the authoritative, committed history)
+/benchmarks/*.zip
+
+# Obsidian per-session UI state (keep graph.json/appearance.json; drop workspace)
+docs/SIR-Vault/.obsidian/workspace.json
+docs/SIR-Vault/.obsidian/workspace-mobile.json
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+*.swp

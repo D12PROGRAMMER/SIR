@@ -1,0 +1,69 @@
+{
+  "acceptance_checks": "34/34 checks passed",
+  "binary_bytes": 5460408,
+  "build_ok": true,
+  "bus_restart_checks": "4/4 checks passed",
+  "cargo": "cargo 1.97.0 (c980f4866 2026-06-30)",
+  "chromium_ready": true,
+  "clean_release_build_seconds": 83.3,
+  "cpus": 6,
+  "date_utc": "2026-07-14T22:59:16.308152+00:00",
+  "duplicate_dependency_versions": [],
+  "firefox_ready": true,
+  "flood_control_latency_during_chromium_load": {
+    "max_ms": 11.48, "median_ms": 1.53, "min_ms": 0.99, "n": 146, "p95_ms": 2.21
+  },
+  "flood_quiet_baseline": {
+    "max_ms": 1.78, "median_ms": 1.49, "min_ms": 1.07, "n": 10, "p95_ms": 1.74
+  },
+  "gate_ok": true,
+  "idle_rss_kb": 6928,
+  "initial_enumeration_chromium": {
+    "max_ms": 542.89, "median_ms": 492.35, "min_ms": 488.7, "n": 3, "p95_ms": 492.35
+  },
+  "initial_enumeration_chromium_line": "[ui-mcp] connected: enumerated 2 apps, 225 nodes",
+  "initial_enumeration_firefox": {
+    "max_ms": 4428.78, "median_ms": 1971.65, "min_ms": 1167.57, "n": 3, "p95_ms": 1971.65
+  },
+  "initial_enumeration_firefox_line": "[ui-mcp] connected: enumerated 2 apps, 848 nodes",
+  "initial_enumeration_gtk": {
+    "max_ms": 30.36, "median_ms": 28.21, "min_ms": 20.76, "n": 5, "p95_ms": 29.81
+  },
+  "initial_enumeration_gtk_line": "[ui-mcp] connected: enumerated 1 apps, 10 nodes",
+  "kernel": "Linux 6.12.95+deb13-cloud-amd64",
+  "list_controls_large": {
+    "max_ms": 2.29, "median_ms": 1.43, "min_ms": 1.12, "n": 10, "p95_ms": 2.04
+  },
+  "list_controls_small": {
+    "max_ms": 1.51, "median_ms": 0.89, "min_ms": 0.66, "n": 20, "p95_ms": 1.33
+  },
+  "peak_rss_kb": 7580,
+  "press_non_settle": {
+    "max_ms": 8.31, "median_ms": 7.57, "min_ms": 6.53, "n": 10, "p95_ms": 8.21
+  },
+  "press_total": {
+    "max_ms": 158.31, "median_ms": 157.57, "min_ms": 156.53, "n": 10, "p95_ms": 158.21
+  },
+  "resp_bytes_find": 143,
+  "resp_bytes_list_controls_large": 26467,
+  "resp_bytes_list_controls_small": 557,
+  "resp_bytes_press": 78,
+  "resp_bytes_read": 129,
+  "runtime_dependency_crates": 89,
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "schema": "sir-combined-pass-v1",
+  "source_sha256": "0cfe2c72effb89161480097fe97788515215b694892d7f665fee8c7a4a0d6105",
+  "src_lines": 1765,
+  "startup_to_initialize": {
+    "max_ms": 30.79, "median_ms": 28.58, "min_ms": 21.07, "n": 5, "p95_ms": 30.21
+  },
+  "warm_find_by_id_small": {
+    "max_ms": 1.92, "median_ms": 1.32, "min_ms": 0.82, "n": 30, "p95_ms": 1.81
+  },
+  "warm_find_by_id_with_large_cache": {
+    "max_ms": 1.88, "median_ms": 0.97, "min_ms": 0.81, "n": 30, "p95_ms": 1.46
+  },
+  "warm_read_by_ref": {
+    "max_ms": 3.45, "median_ms": 2.24, "min_ms": 1.61, "n": 30, "p95_ms": 2.99
+  }
+}

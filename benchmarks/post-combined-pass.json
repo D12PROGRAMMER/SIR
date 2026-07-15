@@ -1,0 +1,121 @@
+{
+  "acceptance_checks": "34/34 checks passed",
+  "binary_bytes": 5437528,
+  "build_ok": true,
+  "bus_restart_checks": "4/4 checks passed",
+  "cargo": "cargo 1.97.0 (c980f4866 2026-06-30)",
+  "chromium_ready": true,
+  "clean_release_build_seconds": 70.5,
+  "cpus": 6,
+  "date_utc": "2026-07-14T23:26:03.155330+00:00",
+  "duplicate_dependency_versions": [],
+  "firefox_ready": true,
+  "flood_control_latency_during_chromium_load": {
+    "max_ms": 2.5,
+    "median_ms": 1.27,
+    "min_ms": 0.79,
+    "n": 147,
+    "p95_ms": 1.65
+  },
+  "flood_quiet_baseline": {
+    "max_ms": 1.22,
+    "median_ms": 0.91,
+    "min_ms": 0.77,
+    "n": 10,
+    "p95_ms": 1.15
+  },
+  "gate_ok": true,
+  "idle_rss_kb": 6928,
+  "initial_enumeration_chromium": {
+    "max_ms": 514.39,
+    "median_ms": 497.87,
+    "min_ms": 481.07,
+    "n": 3,
+    "p95_ms": 497.87
+  },
+  "initial_enumeration_chromium_line": "[ui-mcp] connected: enumerated 2 apps, 239 nodes",
+  "initial_enumeration_firefox": {
+    "max_ms": 3579.99,
+    "median_ms": 1601.01,
+    "min_ms": 1006.7,
+    "n": 3,
+    "p95_ms": 1601.01
+  },
+  "initial_enumeration_firefox_line": "[ui-mcp] connected: enumerated 2 apps, 848 nodes",
+  "initial_enumeration_gtk": {
+    "max_ms": 28.6,
+    "median_ms": 26.69,
+    "min_ms": 18.18,
+    "n": 5,
+    "p95_ms": 27.38
+  },
+  "initial_enumeration_gtk_line": "[ui-mcp] connected: enumerated 1 apps, 10 nodes",
+  "kernel": "Linux 6.12.95+deb13-cloud-amd64",
+  "list_controls_large": {
+    "max_ms": 1.52,
+    "median_ms": 1.16,
+    "min_ms": 0.97,
+    "n": 10,
+    "p95_ms": 1.35
+  },
+  "list_controls_small": {
+    "max_ms": 1.18,
+    "median_ms": 0.93,
+    "min_ms": 0.48,
+    "n": 20,
+    "p95_ms": 1.05
+  },
+  "peak_rss_kb": 7840,
+  "press_non_settle": {
+    "max_ms": 7.49,
+    "median_ms": 6.03,
+    "min_ms": 5.07,
+    "n": 10,
+    "p95_ms": 6.8
+  },
+  "press_total": {
+    "max_ms": 157.49,
+    "median_ms": 156.03,
+    "min_ms": 155.07,
+    "n": 10,
+    "p95_ms": 156.8
+  },
+  "resp_bytes_find": 143,
+  "resp_bytes_list_controls_large": 27671,
+  "resp_bytes_list_controls_small": 557,
+  "resp_bytes_press": 78,
+  "resp_bytes_read": 129,
+  "runtime_dependency_crates": 84,
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "schema": "sir-combined-pass-v1",
+  "source_sha256": "7b4fef380d21a08b569f79f0c86de65d0cfb025f1dace33d10bd4a175df0fc0f",
+  "src_lines": 1821,
+  "startup_to_initialize": {
+    "max_ms": 28.92,
+    "median_ms": 27.09,
+    "min_ms": 18.75,
+    "n": 5,
+    "p95_ms": 27.72
+  },
+  "warm_find_by_id_small": {
+    "max_ms": 1.69,
+    "median_ms": 1.1,
+    "min_ms": 0.8,
+    "n": 30,
+    "p95_ms": 1.47
+  },
+  "warm_find_by_id_with_large_cache": {
+    "max_ms": 1.2,
+    "median_ms": 0.87,
+    "min_ms": 0.61,
+    "n": 30,
+    "p95_ms": 1.13
+  },
+  "warm_read_by_ref": {
+    "max_ms": 3.03,
+    "median_ms": 2.64,
+    "min_ms": 1.76,
+    "n": 30,
+    "p95_ms": 2.92
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "collapse-filter": false,
+  "search": "-path:\"_generated\"",
+  "showTags": false,
+  "showAttachments": false,
+  "hideUnresolved": true,
+  "showOrphans": true,
+  "collapse-color-groups": true,
+  "colorGroups": [
+    {
+      "query": "path:\"00 - SIR Home\"",
+      "color": {
+        "a": 1,
+        "rgb": 16762880
+      }
+    },
+    {
+      "query": "path:\"01 - Architecture\"",
+      "color": {
+        "a": 1,
+        "rgb": 4359668
+      }
+    },
+    {
+      "query": "path:\"02 - Modules\"",
+      "color": {
+        "a": 1,
+        "rgb": 3450963
+      }
+    },
+    {
+      "query": "path:\"03 - Symbols\"",
+      "color": {
+        "a": 1,
+        "rgb": 10395294
+      }
+    },
+    {
+      "query": "path:\"04 - Execution Flows\"",
+      "color": {
+        "a": 1,
+        "rgb": 16747008
+      }
+    },
+    {
+      "query": "path:\"05 - Interfaces\"",
+      "color": {
+        "a": 1,
+        "rgb": 48340
+      }
+    },
+    {
+      "query": "path:\"06 - Tests\"",
+      "color": {
+        "a": 1,
+        "rgb": 15352629
+      }
+    },
+    {
+      "query": "path:\"07 - Performance\"",
+      "color": {
+        "a": 1,
+        "rgb": 11225020
+      }
+    },
+    {
+      "query": "path:\"08 - Decisions\"",
+      "color": {
+        "a": 1,
+        "rgb": 15277667
+      }
+    },
+    {
+      "query": "path:\"09 - Operations\"",
+      "color": {
+        "a": 1,
+        "rgb": 7951688
+      }
+    },
+    {
+      "query": "path:\"_generated\"",
+      "color": {
+        "a": 1,
+        "rgb": 5920587
+      }
+    },
+    {
+      "query": "file:\"Unresolved Questions\"",
+      "color": {
+        "a": 1,
+        "rgb": 16771899
+      }
+    }
+  ],
+  "collapse-display": false,
+  "showArrow": true,
+  "textFadeMultiplier": 1.2,
+  "nodeSizeMultiplier": 1.38010380622837,
+  "lineSizeMultiplier": 0.396712802768166,
+  "collapse-forces": false,
+  "centerStrength": 0.392733564013841,
+  "repelStrength": 18,
+  "linkStrength": 0.85,
+  "linkDistance": 180,
+  "scale": 0.11077395735514839,
+  "close": false
+}
