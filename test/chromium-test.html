@@ -2,8 +2,9 @@
 <html>
 <head><title>Chromium Test App</title></head>
 <body>
-  <h1>ui-mcp chromium test</h1>
+  <h1 id="status">idle</h1>
   <input id="web-filename" aria-label="Filename">
-  <button id="save-project" onclick="document.title = 'Chromium Saved'">Save</button>
+  <button id="save-project"
+    onclick="document.getElementById('status').textContent='PRESS-CONFIRMED';document.title='Chromium Saved'">Save</button>
 </body>
 </html>

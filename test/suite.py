@@ -226,6 +226,17 @@ def run_qt(m):
         kill(p)
 
 
+def web_press_confirmed(m, app_name, timeout_ms=10000):
+    """True iff the DOM onclick actually ran: the fixture's heading text
+    becomes the exact sentinel PRESS-CONFIRMED only from the handler. A press
+    that returns pressed=true but never fires onclick yields a timeout here."""
+    res, err = m.call("ui_wait_for",
+                      {"query": {"app": app_name, "role": "heading",
+                                 "name": "PRESS-CONFIRMED"},
+                       "timeout_ms": timeout_ms})
+    return (not err) and bool(res.get("found"))
+
+
 def run_web(app_name, m):
     ids = {"save": "save-project", "text": "web-filename"}
     found, err = m.call("ui_find", {"app": app_name, "role": "button", "name": "Save"})
@@ -234,13 +245,12 @@ def run_web(app_name, m):
     res, err = m.call("ui_press", {"target": {"app": app_name, "id": "save-project"}})
     check(f"[{app_name}] press web button by DOM id",
           (not err) and res.get("pressed"), f"resp={res}")
-    res, err = m.call("ui_wait_for",
-                     {"query": {"app": app_name, "role": "frame",
-                                "name": ids.get("title", "Chromium Saved")},
-                      "timeout_ms": 6000})
-    # title match is best-effort across engines; report but don't hard-require name text
-    check(f"[{app_name}] press produced a document/title update",
-          (not err) or res.get("error") == "timeout", f"resp={res}")
+    # Observable side effect: the onclick handler sets a heading to an exact
+    # sentinel. This must actually appear — a timeout is a FAILURE, not a pass.
+    # (Previously this asserted a title update but accepted a timeout, so a press
+    #  that returned pressed=true without firing onclick slipped through.)
+    check(f"[{app_name}] press fired the DOM onclick handler",
+          web_press_confirmed(m, app_name), "sentinel heading never appeared")
 
 
 def run_chromium(m):
@@ -330,6 +340,10 @@ def run_firefox(m):
             r2, e2 = m.call("ui_press", {"target": {"ref": ref}})
             check("[Firefox] press web button by ref",
                   (not e2) and r2.get("pressed"), f"resp={r2}")
+            # Firefox reports the button's action name oddly (";;"); assert the
+            # DOM handler actually fired, not just that DoAction returned true.
+            check("[Firefox] press fired the DOM onclick handler",
+                  web_press_confirmed(m, "Firefox"), "sentinel heading never appeared")
     finally:
         subprocess.run(["pkill", "-9", "firefox"])
 
