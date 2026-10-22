@@ -127,6 +127,17 @@ public class AndroidSmokeTest {
     }
 
     @Test
+    public void recentEmojiNotLearnedFromPrivateFields() {
+        assertTrue(SwagKeysService.allowsLearning(info(InputType.TYPE_CLASS_TEXT, 0)));
+        assertFalse(SwagKeysService.allowsLearning(info(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PASSWORD, 0)));
+        assertFalse(SwagKeysService.allowsLearning(info(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD, 0)));
+        assertFalse(SwagKeysService.allowsLearning(info(InputType.TYPE_CLASS_TEXT,
+                EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING)));
+    }
+
+    @Test
     public void settingsActivityBuilds() {
         SettingsActivity activity = Robolectric.buildActivity(SettingsActivity.class).setup().get();
         assertNotNull(activity.findViewById(android.R.id.content));

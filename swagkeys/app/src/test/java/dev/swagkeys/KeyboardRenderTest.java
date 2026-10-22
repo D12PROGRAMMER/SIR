@@ -60,6 +60,7 @@ public class KeyboardRenderTest {
             @Override public void onKey(int code) { keys.add(code); }
             @Override public void onEmoji(String emoji) { emojis.add(emoji); }
             @Override public void onSpaceLongPress() { keys.add(-100); }
+            @Override public void onSwitchKeyboard() { keys.add(-103); }
             @Override public void onStyleSelected(TextStyle style) { stylesPicked.add(style); }
             @Override public void onSlangToggle() { slangToggles++; }
             @Override public void onSuggestionTap() { keys.add(-101); }
@@ -495,6 +496,54 @@ public class KeyboardRenderTest {
         assertEquals("👍🏿", provider.createAccessibilityNodeInfo(705).getContentDescription().toString());
         assertTrue(provider.performAction(705, AccessibilityNodeInfo.ACTION_CLICK, null));
         assertEquals(List.of("👍🏿"), emojis);
+    }
+
+    @Test
+    public void longPressEmojiKeySwitchesKeyboard() {
+        Key emojiKey = find(Key.CODE_EMOJI);
+        float[][] p = {{emojiKey.bounds.centerX(), emojiKey.bounds.centerY()}};
+        touch(MotionEvent.ACTION_DOWN, 0, p);
+        ShadowLooper.idleMainLooper(600, java.util.concurrent.TimeUnit.MILLISECONDS);
+        touch(MotionEvent.ACTION_UP, 0, p);
+        assertEquals(List.of(-103), keys);
+        assertTrue(!view.isEmojiPanelOpen());
+        AccessibilityNodeInfo node = view.getAccessibilityNodeProvider()
+                .createAccessibilityNodeInfo(1000 + 3 * 100 + 1);
+        boolean labelled = false;
+        for (AccessibilityNodeInfo.AccessibilityAction a : node.getActionList()) {
+            if (a.getId() == AccessibilityNodeInfo.ACTION_LONG_CLICK
+                    && "Switch keyboard".contentEquals(a.getLabel())) labelled = true;
+        }
+        assertTrue(labelled);
+    }
+
+    @Test
+    public void tapThatStopsTabScrollDoesNotInsert() {
+        tap(find(Key.CODE_EMOJI));
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        provider.performAction(500 + 3, AccessibilityNodeInfo.ACTION_CLICK, null); // start scrolling
+        float[][] cell = {{view.getWidth() / 2f, view.getHeight() / 3f}};
+        touch(MotionEvent.ACTION_DOWN, 0, cell);
+        touch(MotionEvent.ACTION_UP, 0, cell);
+        assertTrue(emojis.isEmpty());
+        // Once stopped, the next tap types.
+        touch(MotionEvent.ACTION_DOWN, 0, cell);
+        touch(MotionEvent.ACTION_UP, 0, cell);
+        assertEquals(1, emojis.size());
+    }
+
+    @Test
+    public void panelAbcFromSymbolsReturnsToLetters() {
+        tap(find(Key.CODE_MODE_SYMBOLS));
+        tap(find(Key.CODE_EMOJI));
+        assertTrue(view.isEmojiPanelOpen());
+        // A tap low in the bottom padding band still hits ABC.
+        float density = context.getResources().getDisplayMetrics().density;
+        float[][] abc = {{2f, view.getHeight() - 2 * density}};
+        touch(MotionEvent.ACTION_DOWN, 0, abc);
+        touch(MotionEvent.ACTION_UP, 0, abc);
+        assertTrue(!view.isEmojiPanelOpen());
+        assertEquals(KeyboardLayouts.Mode.LETTERS, view.mode());
     }
 
     @Test

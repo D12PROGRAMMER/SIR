@@ -54,6 +54,8 @@
     <string name="a11y_more_symbols">More symbols</string>
     <string name="a11y_letters">Letters</string>
     <string name="a11y_emoji">Emoji</string>
+    <string name="a11y_switch_keyboard">Switch keyboard</string>
+    <string name="a11y_choose_keyboard">Choose keyboard</string>
     <string name="a11y_emoji_recent">Recently used emoji</string>
     <string name="a11y_emoji_smileys">Smileys and emotion</string>
     <string name="a11y_emoji_people">People and gestures</string>

@@ -76,6 +76,15 @@ public final class DotIcon {
             "....##.",
             ".....##");
 
+    public static final DotIcon GLOBE = new DotIcon(
+            "..###..",
+            ".#.#.#.",
+            "#..#..#",
+            "#######",
+            "#..#..#",
+            ".#.#.#.",
+            "..###..");
+
     public static final DotIcon EMOJI = new DotIcon(
             "..#####..",
             ".#.....#.",

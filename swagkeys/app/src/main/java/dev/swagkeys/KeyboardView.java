@@ -54,6 +54,9 @@ public final class KeyboardView extends View {
 
         void onSpaceLongPress();
 
+        /** Long press on the emoji key: switch to the next input method. */
+        void onSwitchKeyboard();
+
         void onStyleSelected(TextStyle style);
 
         void onSlangToggle();
@@ -626,6 +629,12 @@ public final class KeyboardView extends View {
         if (icon != null) {
             fill.setColor(fg);
             icon.draw(canvas, cx, cy, Math.min(tmp.height(), tmp.width()) * 0.46f, fill);
+            if (k.code == Key.CODE_EMOJI) {
+                // Long-press hint: switch keyboard.
+                fill.setColor(palette.textSecondary);
+                DotIcon.GLOBE.draw(canvas, tmp.right - 9 * density, tmp.top + 9 * density,
+                        9 * density, fill);
+            }
             return;
         }
         text.setTextAlign(Paint.Align.CENTER);
@@ -977,6 +986,9 @@ public final class KeyboardView extends View {
             case CHAR:
                 if (key.longPressCode != 0) scheduleLongPress(p, LONG_PRESS_MS);
                 break;
+            case FUNCTION:
+                if (key.code == Key.CODE_EMOJI) scheduleLongPress(p, LONG_PRESS_FUNCTION_MS);
+                break;
             default:
                 break;
         }
@@ -1184,6 +1196,10 @@ public final class KeyboardView extends View {
         closeEmojiPopup();
         emojiPanelOpen = false;
         emojiScroller.forceFinished(true);
+        if (mode == KeyboardLayouts.Mode.SYMBOLS || mode == KeyboardLayouts.Mode.SYMBOLS2) {
+            switchMode(KeyboardLayouts.Mode.LETTERS);
+            return;
+        }
         applyAutoCaps();
         notifyA11yLayoutChanged();
         invalidate();
@@ -1268,9 +1284,20 @@ public final class KeyboardView extends View {
         return top + emojiCellH > emojiGridRect.top && top < emojiGridRect.bottom;
     }
 
-    private void onEmojiPointerDown(int id, float x, float y) {
+    /** Maps the bottom padding band and side margins onto the panel, as keyAt does for keys. */
+    private float panelX(float x) {
+        return Math.max(emojiAbcKey.bounds.left, Math.min(x, emojiDelKey.bounds.right - 1));
+    }
+
+    private float panelY(float y) {
+        return y >= emojiAbcKey.bounds.top ? Math.min(y, emojiAbcKey.bounds.bottom - 1) : y;
+    }
+
+    private void onEmojiPointerDown(int id, float rawX, float rawY) {
         if (pointers.size() > 0) return;
         Pointer p = new Pointer(id);
+        float x = emojiPopup != null ? rawX : panelX(rawX);
+        float y = emojiPopup != null ? rawY : panelY(rawY);
         if (emojiPopup != null) {
             // Only a sticky popup (accessibility) is open without a finger down.
             int i = emojiPopupIndexAt(x, y, false);
@@ -1283,12 +1310,14 @@ public final class KeyboardView extends View {
             emojiPopupSelected = i;
         } else if (emojiGridRect.contains(x, y)) {
             p.region = REGION_EMOJI;
-            p.tile = emojiCellAt(x, y);
+            // A touch that stops a running fling or tab scroll only stops it; it does not type.
+            boolean caught = !emojiScroller.isFinished();
+            emojiScroller.forceFinished(true);
+            p.tile = caught ? -1 : emojiCellAt(x, y);
             if (p.tile >= 0 && EmojiData.variantsOf(getContext(), emojiCells.get(p.tile)).size() > 1) {
                 scheduleEmojiLongPress(p);
             }
-            emojiScroller.forceFinished(true);
-            emojiDragging = false;
+            emojiDragging = caught;
             emojiDownY = y;
             emojiLastY = y;
             if (emojiVelocity == null) {
@@ -1316,8 +1345,10 @@ public final class KeyboardView extends View {
         }
     }
 
-    private void onEmojiPointerUp(Pointer p, float x, float y) {
+    private void onEmojiPointerUp(Pointer p, float rawX, float rawY) {
         cancelEmojiLongPress();
+        float x = p.region == REGION_EMOJI_POPUP ? rawX : panelX(rawX);
+        float y = p.region == REGION_EMOJI_POPUP ? rawY : panelY(rawY);
         switch (p.region) {
             case REGION_EMOJI_POPUP:
                 if (emojiPopup != null && p.tile >= 0 && p.tile == emojiPopupIndexAt(x, y, false)) {
@@ -1343,7 +1374,7 @@ public final class KeyboardView extends View {
                             postInvalidateOnAnimation();
                         }
                     }
-                    notifyA11yLayoutChanged();
+                    notifyA11yScrolled();
                 } else if (p.tile >= 0 && p.tile == emojiCellAt(x, y)) {
                     emitEmoji(emojiCells.get(p.tile));
                 }
@@ -1452,7 +1483,7 @@ public final class KeyboardView extends View {
         if (emojiScroller.computeScrollOffset()) {
             emojiScrollY = emojiScroller.getCurrY();
             clampEmojiScroll();
-            if (emojiScroller.isFinished()) notifyA11yLayoutChanged();
+            if (emojiScroller.isFinished()) notifyA11yScrolled();
             postInvalidateOnAnimation();
         }
     }
@@ -1539,6 +1570,12 @@ public final class KeyboardView extends View {
                 if (shiftChordTyped) return;
                 shift = Shift.LOCKED;
                 feedback(p.key.code);
+                break;
+            case FUNCTION:
+                if (p.consumed || p.key.code != Key.CODE_EMOJI) return;
+                p.consumed = true;
+                feedback(p.key.code);
+                if (listener != null) listener.onSwitchKeyboard();
                 break;
             default:
                 break;
@@ -1636,6 +1673,8 @@ public final class KeyboardView extends View {
             return t < 0 ? VID_NONE : VID_TILE + t;
         }
         if (emojiPanelOpen) {
+            x = panelX(x);
+            y = panelY(y);
             if (emojiGridRect.contains(x, y)) {
                 int idx = emojiCellAt(x, y);
                 return idx < 0 ? VID_NONE : VID_EMOJI + idx;
@@ -1810,6 +1849,10 @@ public final class KeyboardView extends View {
             if (listener != null) listener.onSpaceLongPress();
             return true;
         }
+        if (k.code == Key.CODE_EMOJI) {
+            if (listener != null) listener.onSwitchKeyboard();
+            return true;
+        }
         if (k.type == Key.Type.CHAR && k.longPressCode != 0) {
             feedback(k.code);
             emitChar(k, k.longPressCode);
@@ -1866,10 +1909,18 @@ public final class KeyboardView extends View {
         hoveredVid = VID_NONE;
         a11yFocusedVid = VID_NONE;
         ViewParent parent = getParent();
-        if (parent != null && touchExploring()) {
+        AccessibilityManager am = (AccessibilityManager)
+                getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+        if (parent != null && am != null && am.isEnabled()) {
             parent.notifySubtreeAccessibilityStateChanged(this, this,
                     AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE);
         }
+    }
+
+    /** Reports a settled emoji grid scroll so accessibility services refresh visible cells. */
+    private void notifyA11yScrolled() {
+        notifyA11yLayoutChanged();
+        sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_SCROLLED);
     }
 
     @Override
@@ -1941,7 +1992,13 @@ public final class KeyboardView extends View {
             Key k = keyForVid(vid);
             boolean emojiTones = vid >= VID_EMOJI
                     && EmojiData.variantsOf(getContext(), emojiCells.get(vid - VID_EMOJI)).size() > 1;
-            if (emojiTones || (k != null && (k.type == Key.Type.SPACE || k.longPressCode != 0))) {
+            if (k != null && (k.type == Key.Type.SPACE || k.code == Key.CODE_EMOJI)) {
+                info.setLongClickable(true);
+                info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                        AccessibilityNodeInfo.ACTION_LONG_CLICK, getContext().getString(
+                                k.type == Key.Type.SPACE ? R.string.a11y_choose_keyboard
+                                        : R.string.a11y_switch_keyboard)));
+            } else if (emojiTones || (k != null && k.longPressCode != 0)) {
                 info.setLongClickable(true);
                 info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK);
             }
@@ -1965,7 +2022,7 @@ public final class KeyboardView extends View {
                     emojiScrollY += action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ? page : -page;
                     clampEmojiScroll();
                     invalidate();
-                    notifyA11yLayoutChanged();
+                    notifyA11yScrolled();
                     return emojiScrollY != before;
                 }
                 return performAccessibilityAction(action, arguments);

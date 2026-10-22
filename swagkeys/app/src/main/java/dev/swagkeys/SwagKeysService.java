@@ -6,6 +6,8 @@ import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.inputmethodservice.InputMethodService;
 import android.os.Build;
+import android.os.IBinder;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
@@ -206,8 +208,39 @@ public final class SwagKeysService extends InputMethodService
     @Override
     public void onEmoji(String emoji) {
         logic.onEmoji(emoji);
+        // Recents are typing history: not kept for passwords or when the app opts out.
+        if (!allowsLearning(getCurrentInputEditorInfo())) return;
         prefs.addRecentEmoji(emoji);
         if (keyboard != null) keyboard.setRecentEmojis(prefs.recentEmojis());
+    }
+
+    static boolean allowsLearning(EditorInfo info) {
+        if (info == null) return true;
+        if ((info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0) return false;
+        int cls = info.inputType & InputType.TYPE_MASK_CLASS;
+        int variation = info.inputType & InputType.TYPE_MASK_VARIATION;
+        return !(cls == InputType.TYPE_CLASS_TEXT
+                && (variation == InputType.TYPE_TEXT_VARIATION_PASSWORD
+                || variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD));
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onSwitchKeyboard() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            if (shouldOfferSwitchingToNextInputMethod() && switchToNextInputMethod(false)) return;
+        } else {
+            Window window = getWindow() == null ? null : getWindow().getWindow();
+            IBinder token = window == null ? null : window.getAttributes().token;
+            if (token != null && imm != null && imm.shouldOfferSwitchingToNextInputMethod(token)
+                    && imm.switchToNextInputMethod(token, false)) {
+                return;
+            }
+        }
+        // No other switching-aware keyboard to rotate to: let the user pick one.
+        if (imm != null) imm.showInputMethodPicker();
     }
 
     @Override
