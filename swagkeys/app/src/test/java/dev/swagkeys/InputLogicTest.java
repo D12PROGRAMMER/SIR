@@ -509,6 +509,24 @@ public class InputLogicTest {
     }
 
     @Test
+    public void cursorMoveReportsCharactersMovedAndCanDeleteReflectsText() {
+        start("abc", FieldConfig.Mode.STYLED, false, TextStyle.NORMAL);
+        assertEquals(-2, logic.moveCursor(-2));
+        editor.deliverUpdates();
+        assertEquals(-1, logic.moveCursor(-5));
+        editor.deliverUpdates();
+        assertEquals(0, logic.moveCursor(-1));
+        assertTrue(!logic.canDelete());
+        assertEquals(3, logic.moveCursor(9));
+        editor.deliverUpdates();
+        assertTrue(logic.canDelete());
+        start("", FieldConfig.Mode.STYLED, false, TextStyle.NORMAL);
+        assertFalse(logic.canDelete());
+        type("x");
+        assertTrue(logic.canDelete());
+    }
+
+    @Test
     public void cursorMoveCountsGraphemesAndHandlesRtl() {
         start("a👍🏽b", FieldConfig.Mode.STYLED, false, TextStyle.NORMAL);
         logic.moveCursor(-3);

@@ -48,6 +48,8 @@ public class KeyboardRenderTest {
     private final List<TextStyle> stylesPicked = new ArrayList<>();
     private final List<String> emojis = new ArrayList<>();
     private final List<Integer> cursorSteps = new ArrayList<>();
+    private boolean cursorBlocked;
+    private boolean canDeleteText = true;
     private final List<Integer> deletedWords = new ArrayList<>();
     private int slangToggles;
 
@@ -63,7 +65,11 @@ public class KeyboardRenderTest {
             @Override public void onEmoji(String emoji) { emojis.add(emoji); }
             @Override public void onSpaceLongPress() { keys.add(-100); }
             @Override public void onSwitchKeyboard() { keys.add(-103); }
-            @Override public void onCursorMove(int steps) { cursorSteps.add(steps); }
+            @Override public int onCursorMove(int steps) {
+                cursorSteps.add(steps);
+                return cursorBlocked ? 0 : steps;
+            }
+            @Override public boolean canDelete() { return canDeleteText; }
             @Override public void onDeleteWords(int words) { deletedWords.add(words); }
             @Override public void onStyleSelected(TextStyle style) { stylesPicked.add(style); }
             @Override public void onSlangToggle() { slangToggles++; }
@@ -820,6 +826,64 @@ public class KeyboardRenderTest {
         touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 80 * density, y}});
         assertTrue(deletedWords.isEmpty());
         assertTrue(keys.size() >= 2);
+    }
+
+    @Test
+    public void heldDeleteVibratesOnRepeats() {
+        view.setFeedback(true, false);
+        Key del = find(Key.CODE_DELETE);
+        float[][] p = {{del.bounds.centerX(), del.bounds.centerY()}};
+        touch(MotionEvent.ACTION_DOWN, 0, p);
+        assertEquals(1, view.hapticCount); // the press
+        // Repeats at 400, 450, 500, 550, 600 ms: every other one vibrates.
+        ShadowLooper.idleMainLooper(600, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertEquals(5, keys.size());
+        assertEquals(1 + 3, view.hapticCount);
+        // Nothing left to delete: repeats continue silently.
+        canDeleteText = false;
+        ShadowLooper.idleMainLooper(300, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertEquals(4, view.hapticCount);
+        touch(MotionEvent.ACTION_UP, 0, p);
+    }
+
+    @Test
+    public void cursorSwipeVibratesPerEffectiveStep() {
+        view.setFeedback(true, false);
+        Key space = find(Key.CODE_SPACE);
+        float density = context.getResources().getDisplayMetrics().density;
+        float x = space.bounds.centerX();
+        float y = space.bounds.centerY();
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
+        int afterPress = view.hapticCount;
+        for (int i = 1; i <= 6; i++) {
+            touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x + i * 10 * density, y}});
+        }
+        int moving = view.hapticCount - afterPress;
+        assertTrue("ticks " + moving, moving >= 3);
+        cursorBlocked = true; // against the end of the text
+        for (int i = 7; i <= 10; i++) {
+            touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x + i * 10 * density, y}});
+        }
+        assertEquals(afterPress + moving, view.hapticCount);
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x + 100 * density, y}});
+    }
+
+    @Test
+    public void wordDeleteStepsVibrate() {
+        view.setFeedback(true, false);
+        Key del = find(Key.CODE_DELETE);
+        float density = context.getResources().getDisplayMetrics().density;
+        float x = del.bounds.centerX();
+        float y = del.bounds.centerY();
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
+        int afterPress = view.hapticCount;
+        for (int i = 1; i <= 12; i++) {
+            touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - i * 9 * density, y}});
+        }
+        assertEquals(List.of(), deletedWords);
+        assertEquals(afterPress + 3, view.hapticCount); // counts 1, 2, 3
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 108 * density, y}});
+        assertEquals(List.of(3), deletedWords);
     }
 
     @Test

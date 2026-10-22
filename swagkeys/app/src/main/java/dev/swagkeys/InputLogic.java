@@ -317,8 +317,8 @@ public final class InputLogic {
      * Moves the cursor by {@code steps} characters with arrow-key events, which every editor
      * (including TYPE_NULL terminals) handles grapheme-aware. The composing word is kept as typed.
      */
-    public void moveCursor(int steps) {
-        if (steps == 0) return;
+    public int moveCursor(int steps) {
+        if (steps == 0) return 0;
         phantomSpaceAt = -1;
         clearUndo();
         if (word.length() > 0) {
@@ -345,6 +345,16 @@ public final class InputLogic {
         // The editor reports the new position through onUpdateSelection.
         selStart = selEnd = -1;
         notifyChanged();
+        return steps < 0 ? -count : count;
+    }
+
+    /** Whether a delete would remove something; true when the editor cannot tell. */
+    public boolean canDelete() {
+        if (config.mode == FieldConfig.Mode.RAW || word.length() > 0) return true;
+        if (selStart >= 0 && selStart != selEnd) return true;
+        CharSequence before = editor.getTextBeforeCursor(1);
+        if (before == null) return true;
+        return before.length() > 0 || hasSelectedText();
     }
 
     /** Deletes the {@code words} words before the cursor (the composing word counts as one). */

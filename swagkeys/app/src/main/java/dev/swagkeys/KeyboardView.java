@@ -58,8 +58,14 @@ public final class KeyboardView extends View {
         /** Long press on the emoji key: switch to the next input method. */
         void onSwitchKeyboard();
 
-        /** Space-bar swipe: move the cursor by {@code steps} characters (negative = left). */
-        void onCursorMove(int steps);
+        /**
+         * Space-bar swipe: move the cursor by {@code steps} characters (negative = left).
+         * Returns how many characters it actually moved (0 at the start or end of the text).
+         */
+        int onCursorMove(int steps);
+
+        /** Whether a delete would remove anything (for repeat feedback). */
+        boolean canDelete();
 
         /** Swipe left from delete: delete the {@code words} words before the cursor. */
         void onDeleteWords(int words);
@@ -1426,8 +1432,9 @@ public final class KeyboardView extends View {
         int steps = (int) ((x - p.cursorAnchorX) / step);
         if (steps == 0) return;
         p.cursorAnchorX += steps * step;
-        if (haptics) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
-        if (listener != null) listener.onCursorMove(steps);
+        int moved = listener == null ? 0 : listener.onCursorMove(steps);
+        // A tick for every step the cursor really moves; none against the end of the text.
+        if (moved != 0) hapticTick();
     }
 
     /** Swipe left from delete: every 36 dp selects one more word; moving back reduces it. */
@@ -1444,7 +1451,7 @@ public final class KeyboardView extends View {
         int count = dx <= start ? 0 : Math.min(20, 1 + (int) ((dx - start) / (36 * density)));
         if (count != p.wordDeleteCount) {
             p.wordDeleteCount = count;
-            if (haptics) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            hapticTick();
         }
     }
 
@@ -2056,10 +2063,16 @@ public final class KeyboardView extends View {
     private void startRepeat(Pointer owner) {
         stopRepeat();
         repeatRunnable = new Runnable() {
+            private int repeats;
+
             @Override
             public void run() {
                 if (owner != null) owner.deleteFired = true;
+                boolean effective = listener == null || listener.canDelete();
                 emit(Key.CODE_DELETE);
+                // Each repeated delete is felt (every other one, ~10 per second, as in AOSP
+                // LatinIME), but not once there is nothing left to delete.
+                if (effective && repeats++ % 2 == 0) feedback(Key.CODE_DELETE);
                 handler.postDelayed(this, REPEAT_INTERVAL_MS);
             }
         };
@@ -2556,8 +2569,18 @@ public final class KeyboardView extends View {
 
     // ---------------------------------------------------------------- feedback
 
+    /** Number of haptic effects performed; read by tests. */
+    int hapticCount;
+
+    /** The key-press haptic, used for presses and for every step of a repeated action. */
+    private void hapticTick() {
+        if (!haptics) return;
+        hapticCount++;
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+    }
+
     private void feedback(int code) {
-        if (haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        hapticTick();
         if (sound && audio != null) {
             int effect;
             switch (code) {

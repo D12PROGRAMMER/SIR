@@ -260,8 +260,13 @@ public final class SwagKeysService extends InputMethodService
     }
 
     @Override
-    public void onCursorMove(int steps) {
-        logic.moveCursor(steps);
+    public int onCursorMove(int steps) {
+        return logic.moveCursor(steps);
+    }
+
+    @Override
+    public boolean canDelete() {
+        return logic.canDelete();
     }
 
     @Override

@@ -38,7 +38,7 @@
     <string name="animations">Animations</string>
     <string name="animations_note">Glyph ripple across the dot grid on every key press, key bounce, pop-up previews, sliding panels, and a decode effect when slang kicks in. Also off whenever Android\'s Remove animations setting is on.</string>
     <string name="gestures_note">Swipe along the space bar to move the cursor. Swipe left from delete to erase whole words (keep sliding for more). Long-press the emoji key to switch keyboards, the space bar to pick one. Hold an emoji with a dot for skin tones.</string>
-    <string name="haptics">Vibrate on key press</string>
+    <string name="haptics">Vibrate on key press and repeats</string>
     <string name="sound">Sound on key press</string>
 
     <string name="try_hint">Type here to test: try \"hello friend this is so cool\"</string>
