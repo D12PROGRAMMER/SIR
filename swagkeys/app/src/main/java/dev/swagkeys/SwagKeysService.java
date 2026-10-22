@@ -18,6 +18,9 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 
+import java.util.Locale;
+import java.util.Set;
+
 /** The input method. Bridges {@link KeyboardView} events to {@link InputLogic}. */
 public final class SwagKeysService extends InputMethodService
         implements KeyboardView.Listener, InputLogic.Listener {
@@ -30,6 +33,12 @@ public final class SwagKeysService extends InputMethodService
     private EditorInfo startedInfo;
     /** Undo state at the previous update, to detect a slang substitution as it happens. */
     private String lastUndoWord;
+    /** Words the user kept by undoing their correction (from {@link Prefs#keptWords()}). */
+    private Set<String> keptWords;
+
+    /** Corrects against the word list once it has loaded; until then words are kept as typed. */
+    private final InputLogic.Corrector corrector =
+            word -> Autocorrect.correct(WordList.peek(), word, keptWords);
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
             (sp, key) -> onPreferenceChanged(key);
@@ -41,8 +50,12 @@ public final class SwagKeysService extends InputMethodService
         logic = new InputLogic(new ConnectionEditor(), this);
         logic.setStyle(prefs.style());
         logic.setSlangEnabled(prefs.slang());
+        keptWords = prefs.keptWords();
+        logic.setCorrector(prefs.autocorrect() ? corrector : null);
+        logic.setAutoCapitalize(prefs.autoCaps());
         prefs.raw().registerOnSharedPreferenceChangeListener(prefListener);
         EmojiData.preload(this);
+        WordList.preload(this);
     }
 
     @Override
@@ -169,6 +182,16 @@ public final class SwagKeysService extends InputMethodService
             case Prefs.KEY_SLANG:
                 logic.setSlangEnabled(prefs.slang());
                 break;
+            case Prefs.KEY_AUTOCORRECT:
+                logic.setCorrector(prefs.autocorrect() ? corrector : null);
+                break;
+            case Prefs.KEY_AUTO_CAPS:
+                logic.setAutoCapitalize(prefs.autoCaps());
+                break;
+            case Prefs.KEY_KEPT_WORDS:
+                keptWords = prefs.keptWords();
+                onInputStateChanged();
+                break;
             case Prefs.KEY_FONT:
             case Prefs.KEY_FONT_VERSION:
                 fontsDirty = true;
@@ -197,9 +220,20 @@ public final class SwagKeysService extends InputMethodService
         String undo = logic.undoableWord();
         keyboard.setStripState(logic.style(), logic.stylesActive(), logic.isSlangEnabled(),
                 slangMode, logic.pendingSlang(), undo);
-        if (undo != null && lastUndoWord == null) keyboard.playSlangAnimation(logic.undoReplacement());
+        if (undo != null && lastUndoWord == null && logic.undoIsSlang()) {
+            keyboard.playSlangAnimation(logic.undoReplacement());
+        }
         lastUndoWord = undo;
         keyboard.setAutoCaps(logic.shouldAutoCapitalize());
+    }
+
+    @Override
+    public void onWordKept(String word) {
+        // Like recents, kept words are typing history.
+        if (!allowsLearning(getCurrentInputEditorInfo())) return;
+        String lower = word.toLowerCase(Locale.ROOT);
+        keptWords.add(lower);
+        prefs.keepWord(lower);
     }
 
     // ---------------------------------------------------------------- KeyboardView.Listener

@@ -4,7 +4,9 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Preference keys and typed accessors. */
 public final class Prefs {
@@ -23,8 +25,13 @@ public final class Prefs {
     public static final String KEY_ACCENT = "accent";
     public static final String KEY_NUMBER_ROW = "number_row";
     public static final String KEY_ANIMATIONS = "animations";
+    public static final String KEY_AUTOCORRECT = "autocorrect";
+    public static final String KEY_AUTO_CAPS = "auto_caps";
+    /** Lowercased words whose automatic correction the user undid, oldest first. */
+    public static final String KEY_KEPT_WORDS = "kept_words";
 
     private static final int MAX_RECENT_EMOJI = 24;
+    private static final int MAX_KEPT_WORDS = 500;
 
     public static final String THEME_SYSTEM = "system";
     public static final String THEME_DARK = "dark";
@@ -131,6 +138,50 @@ public final class Prefs {
 
     public void setAnimations(boolean on) {
         sp.edit().putBoolean(KEY_ANIMATIONS, on).apply();
+    }
+
+    public boolean autocorrect() {
+        return sp.getBoolean(KEY_AUTOCORRECT, true);
+    }
+
+    public void setAutocorrect(boolean on) {
+        sp.edit().putBoolean(KEY_AUTOCORRECT, on).apply();
+    }
+
+    /** Automatic capitalization; off unless the user turns it on. */
+    public boolean autoCaps() {
+        return sp.getBoolean(KEY_AUTO_CAPS, false);
+    }
+
+    public void setAutoCaps(boolean on) {
+        sp.edit().putBoolean(KEY_AUTO_CAPS, on).apply();
+    }
+
+    /** Words autocorrect leaves alone because the user undid their correction. */
+    public Set<String> keptWords() {
+        return new HashSet<>(keptWordList());
+    }
+
+    private List<String> keptWordList() {
+        List<String> list = new ArrayList<>();
+        for (String w : sp.getString(KEY_KEPT_WORDS, "").split("\n")) {
+            if (!w.isEmpty()) list.add(w);
+        }
+        return list;
+    }
+
+    /** Adds a lowercased word to the kept words; the oldest are dropped beyond the limit. */
+    public void keepWord(String lowerWord) {
+        if (lowerWord.isEmpty() || lowerWord.indexOf('\n') >= 0) return;
+        List<String> list = keptWordList();
+        list.remove(lowerWord);
+        list.add(lowerWord);
+        while (list.size() > MAX_KEPT_WORDS) list.remove(0);
+        sp.edit().putString(KEY_KEPT_WORDS, String.join("\n", list)).apply();
+    }
+
+    public void clearKeptWords() {
+        sp.edit().remove(KEY_KEPT_WORDS).apply();
     }
 
     public boolean haptics() {

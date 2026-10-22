@@ -5,8 +5,9 @@ import java.text.BreakIterator;
 /**
  * Editing state machine. The word being typed is kept unstyled in {@link #word} and shown in the
  * editor as composing text rendered through the current {@link TextStyle}. When a separator is
- * typed, the word is looked up in {@link SlangDictionary}, styled, and committed together with the
- * styled separator. Expected selection offsets are tracked so that belated
+ * typed, the word is corrected (if it is a typo, through the {@link Corrector}), looked up in
+ * {@link SlangDictionary}, styled, and committed together with the styled separator. Expected
+ * selection offsets are tracked so that belated
  * {@code onUpdateSelection} callbacks caused by this IME are distinguished from cursor movement by
  * the user or the application.
  */
@@ -15,6 +16,15 @@ public final class InputLogic {
     public interface Listener {
         /** Composing word, pending slang, undo availability or caps state may have changed. */
         void onInputStateChanged();
+
+        /** The user undid the automatic correction of {@code word} (as typed): keep it from now on. */
+        default void onWordKept(String word) {}
+    }
+
+    /** Typo correction for a finished word. */
+    public interface Corrector {
+        /** The corrected word in the case the user typed, or null to keep {@code word}. */
+        String correct(String word);
     }
 
     private static final int GRAPHEME_LOOKBEHIND = 64;
@@ -25,7 +35,21 @@ public final class InputLogic {
     /** TYPE_TEXT_FLAG_CAP_CHARACTERS, equal to TextUtils.CAP_MODE_CHARACTERS. */
     private static final int CAP_CHARACTERS = 0x00001000;
 
+    /** Replacement of a finished word (typo correction, then slang): none, automatic, or picked. */
     private enum Slang { NONE, AUTO, FORCE }
+
+    /** What a finished word becomes: a correction, slang (of the corrected word), or both. */
+    private static final class Replacement {
+        final String text;
+        final boolean slang;
+        final boolean corrected;
+
+        Replacement(String text, boolean slang, boolean corrected) {
+            this.text = text;
+            this.slang = slang;
+            this.corrected = corrected;
+        }
+    }
 
     private final Editor editor;
     private final Listener listener;
@@ -33,6 +57,10 @@ public final class InputLogic {
     private FieldConfig config = FieldConfig.defaults();
     private TextStyle style = TextStyle.NORMAL;
     private boolean slangEnabled = true;
+    /** Typo correction; null when autocorrect is off. */
+    private Corrector corrector;
+    /** Whether shift turns on by itself where the editor's caps mode asks for it. */
+    private boolean autoCapitalize;
 
     /** Unstyled code points of the word currently held as composing text. */
     private final StringBuilder word = new StringBuilder();
@@ -46,13 +74,20 @@ public final class InputLogic {
     /** Cursor offset after a picked suggestion where a space is owed, or -1. */
     private int phantomSpaceAt = -1;
 
-    /** Last slang substitution, revertible by Delete or the strip while the cursor is unmoved. */
+    /**
+     * Last replacement (correction and/or slang), revertible by Delete or the strip while the
+     * cursor is unmoved.
+     */
     private String undoCommitted;
     private String undoRevert;
     private String undoOriginalWord;
     private String undoSeparator;
     private String undoReplacement;
     private int undoCursor = -1;
+    /** The replacement involved slang (it gets the decode animation). */
+    private boolean undoIsSlang;
+    /** The replacement was an automatic correction only: undoing it keeps the typed word. */
+    private boolean undoKeepsWord;
 
     public InputLogic(Editor editor, Listener listener) {
         this.editor = editor;
@@ -120,6 +155,20 @@ public final class InputLogic {
         notifyChanged();
     }
 
+    /** Sets the typo corrector, or null to turn autocorrect off. */
+    public void setCorrector(Corrector corrector) {
+        if (this.corrector == corrector) return;
+        this.corrector = corrector;
+        notifyChanged();
+    }
+
+    /** Turns automatic capitalization (shift following the editor's caps mode) on or off. */
+    public void setAutoCapitalize(boolean on) {
+        if (autoCapitalize == on) return;
+        autoCapitalize = on;
+        notifyChanged();
+    }
+
     /** True if styles apply to the current field. */
     public boolean stylesActive() {
         return config.mode == FieldConfig.Mode.STYLED;
@@ -135,19 +184,32 @@ public final class InputLogic {
         return slangSuggestActive() && config.slangAuto;
     }
 
+    /** True if typo corrections may be suggested in the current field (same fields as slang). */
+    public boolean correctSuggestActive() {
+        return corrector != null && config.slangSuggest && config.mode == FieldConfig.Mode.STYLED;
+    }
+
+    /** True if typo corrections are applied automatically in the current field. */
+    public boolean correctAutoActive() {
+        return correctSuggestActive() && config.slangAuto;
+    }
+
     // ---------------------------------------------------------------- queries for the UI
 
     public String composingWord() {
         return word.toString();
     }
 
-    /** Slang the current word would be replaced with, or null. */
+    /**
+     * What the current word would be replaced with (its correction, or slang), unstyled, or
+     * null. In fields with automatic replacement this is what finishing the word applies.
+     */
     public String pendingSlang() {
-        if (!slangSuggestActive() || word.length() == 0 || wordAttached) return null;
-        return SlangDictionary.lookup(word.toString());
+        Replacement r = replacementFor(word.toString(), false);
+        return r == null ? null : r.text;
     }
 
-    /** The replacement (as shown, styled) of the revertible slang substitution, or null. */
+    /** The replacement (as shown, styled) of the revertible substitution, or null. */
     public String undoReplacement() {
         return undoAvailable() ? undoReplacement : null;
     }
@@ -157,9 +219,17 @@ public final class InputLogic {
         return undoAvailable() ? undoOriginalWord : null;
     }
 
-    /** Whether the next letter should be capitalized according to the editor's caps mode. */
+    /** Whether the revertible substitution involved slang (as opposed to a correction only). */
+    public boolean undoIsSlang() {
+        return undoAvailable() && undoIsSlang;
+    }
+
+    /**
+     * Whether the next letter should be capitalized according to the editor's caps mode.
+     * Always false while automatic capitalization is off.
+     */
     public boolean shouldAutoCapitalize() {
-        if (config.capsInputType == 0) return false;
+        if (!autoCapitalize || config.capsInputType == 0) return false;
         if ((config.capsInputType & CAP_CHARACTERS) != 0) return true;
         if (word.length() > 0) return false;
         if (editor.getCursorCapsMode(config.capsInputType) != 0) return true;
@@ -213,7 +283,7 @@ public final class InputLogic {
         if (isWordCodePoint(cp) && word.length() == 0 && undoAvailable()
                 && (".".equals(undoSeparator) || ":".equals(undoSeparator))) {
             // The token continues ("good.com", "best:"): take the replacement back.
-            undoSlang();
+            revertReplacement(false);
         }
         clearUndo();
         if (isWordCodePoint(cp)) {
@@ -298,7 +368,7 @@ public final class InputLogic {
     }
 
     /**
-     * Applies the pending slang to the current word immediately. The following space is
+     * Applies the pending replacement to the current word immediately. The following space is
      * inserted only once the next character needs it, so punctuation attaches to the word.
      */
     public void pickSlang() {
@@ -464,8 +534,19 @@ public final class InputLogic {
         return false;
     }
 
-    /** Reverts the last slang substitution. Returns false if none is revertible. */
+    /**
+     * Reverts the last substitution at the user's request (Delete, or UNDO in the strip).
+     * Returns false if none is revertible.
+     */
     public boolean undoSlang() {
+        return revertReplacement(true);
+    }
+
+    /**
+     * Restores the typed word in place of the last substitution. {@code byUser}: the user asked
+     * for it, so an undone automatic correction keeps that word from then on.
+     */
+    private boolean revertReplacement(boolean byUser) {
         if (!undoAvailable()) return false;
         CharSequence before = editor.getTextBeforeCursor(undoCommitted.length());
         if (before == null || !undoCommitted.contentEquals(before)) {
@@ -480,7 +561,9 @@ public final class InputLogic {
             selStart = selEnd = selStart - undoCommitted.length() + undoRevert.length();
         }
         phantomSpaceAt = -1;
+        String kept = byUser && undoKeepsWord ? undoOriginalWord : null;
         clearUndo();
+        if (kept != null && listener != null) listener.onWordKept(kept);
         notifyChanged();
         return true;
     }
@@ -624,8 +707,27 @@ public final class InputLogic {
     }
 
     /**
-     * Commits the composing word (with slang according to {@code slang}) followed by
-     * {@code separator}, both styled, replacing the composing region or the selection.
+     * The replacement for the finished word {@code raw}: its typo correction, and slang for the
+     * corrected (or typed) word. {@code automatic}: as applied without the user picking it.
+     */
+    private Replacement replacementFor(String raw, boolean automatic) {
+        if (raw.isEmpty() || wordAttached) return null;
+        String fixed = null;
+        if (automatic ? correctAutoActive() : correctSuggestActive()) {
+            fixed = corrector.correct(raw);
+            if (raw.equals(fixed)) fixed = null;
+        }
+        String slang = null;
+        if (automatic ? slangAutoActive() : slangSuggestActive()) {
+            slang = SlangDictionary.lookup(fixed != null ? fixed : raw);
+        }
+        if (slang != null) return new Replacement(slang, true, fixed != null);
+        return fixed != null ? new Replacement(fixed, false, true) : null;
+    }
+
+    /**
+     * Commits the composing word (corrected and with slang according to {@code slang}) followed
+     * by {@code separator}, both styled, replacing the composing region or the selection.
      */
     private void commitWord(Slang slang, String separator) {
         commitWord(slang, separator, true);
@@ -633,12 +735,8 @@ public final class InputLogic {
 
     private void commitWord(Slang slang, String separator, boolean styleSeparator) {
         String raw = word.toString();
-        String replacement = null;
-        if (!raw.isEmpty() && !wordAttached
-                && (slang == Slang.FORCE ? slangSuggestActive()
-                        : slang == Slang.AUTO && slangAutoActive())) {
-            replacement = SlangDictionary.lookup(raw);
-        }
+        Replacement r = slang == Slang.NONE ? null : replacementFor(raw, slang == Slang.AUTO);
+        String replacement = r == null ? null : r.text;
         String styledSep = styleSeparator ? style.apply(separator) : separator;
         String text = style.apply(replacement != null ? replacement : raw) + styledSep;
         int base = composingStart >= 0 ? composingStart : selStart;
@@ -654,6 +752,9 @@ public final class InputLogic {
             undoSeparator = separator;
             undoReplacement = style.apply(replacement);
             undoCursor = selEnd;
+            undoIsSlang = r.slang;
+            // A correction the user picked from the strip is not one to learn from.
+            undoKeepsWord = slang == Slang.AUTO && r.corrected && !r.slang;
         }
     }
 
@@ -724,6 +825,8 @@ public final class InputLogic {
         undoSeparator = null;
         undoReplacement = null;
         undoCursor = -1;
+        undoIsSlang = false;
+        undoKeepsWord = false;
     }
 
     private void notifyChanged() {

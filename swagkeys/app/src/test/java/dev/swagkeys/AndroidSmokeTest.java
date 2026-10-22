@@ -127,6 +127,31 @@ public class AndroidSmokeTest {
     }
 
     @Test
+    public void autocorrectDefaultsAndKeptWords() throws IOException {
+        Context ctx = RuntimeEnvironment.getApplication();
+        Prefs prefs = new Prefs(ctx);
+        assertTrue(prefs.autocorrect());
+        assertFalse(prefs.autoCaps());
+        WordList words = WordList.load(ctx);
+        assertTrue(words.size() > 150_000);
+        assertEquals("the", Autocorrect.correct(words, "teh", prefs.keptWords()));
+
+        SwagKeysService service = Robolectric.setupService(SwagKeysService.class);
+        service.onCreateInputView();
+        EditorInfo chat = info(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE, 0);
+        service.onStartInput(chat, false);
+        service.onWordKept("Teh");
+        assertEquals(java.util.Set.of("teh"), prefs.keptWords());
+        prefs.clearKeptWords();
+        assertTrue(prefs.keptWords().isEmpty());
+        for (int i = 0; i < 600; i++) prefs.keepWord("w" + i);
+        assertEquals(500, prefs.keptWords().size());
+        assertFalse(prefs.keptWords().contains("w0"));
+        assertTrue(prefs.keptWords().contains("w599"));
+        service.onDestroy();
+    }
+
+    @Test
     public void recentEmojiNotLearnedFromPrivateFields() {
         assertTrue(SwagKeysService.allowsLearning(info(InputType.TYPE_CLASS_TEXT, 0)));
         assertFalse(SwagKeysService.allowsLearning(info(InputType.TYPE_CLASS_TEXT

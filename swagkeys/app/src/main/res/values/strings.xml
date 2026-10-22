@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">SwagKeys</string>
     <string name="ime_name">SwagKeys</string>
     <string name="subtype_en_us">English (US)</string>
@@ -14,10 +14,19 @@
 
     <string name="style_note">Applied as you type. Change it any time from the style chip on the keyboard. Passwords, e-mail, URLs and number fields are never styled.</string>
 
-    <string name="slang_toggle">Auto-correct to swag slang</string>
+    <string name="slang_toggle">Swap words for swag slang</string>
     <string name="slang_note">Dictionary entries: %1$d. In chat-style fields a listed word is replaced when you finish it (space, punctuation or enter); press delete right after, or tap UNDO in the strip, to restore what you typed. In search, name and address boxes the slang is only offered in the strip: tap it to apply. Words glued to other text (#tags, @names, web addresses) are left alone. The SWAG pill on the keyboard toggles this: solid pill = automatic, outlined pill = strip only.</string>
     <string name="show_dictionary">Show dictionary</string>
     <string name="hide_dictionary">Hide dictionary</string>
+
+    <string name="autocorrect_toggle">Fix typos</string>
+    <string name="autocorrect_note" tools:ignore="Typos">A finished word that is not in the word list (about 170,000 English words) is replaced with the likeliest word one slip away: two letters swapped, a letter missing, doubled or extra, or a neighbouring key hit. Corrections keep exactly the capitals you typed (teh → the, Teh → The, TEH → THE) and never add capitals, apostrophes or punctuation: i, monday and dont stay as typed. Slang and chat words (bruh, rizz, ngl), stretched words (yesss), mixed-case words, and anything with digits or symbols are left alone. Press delete right after a correction, or tap UNDO in the strip, to put your word back; SwagKeys then never corrects that word again. Applies in the same fields as swag slang: automatic in chat boxes, strip-only in search, name and address boxes, never in passwords, URLs or e-mail.</string>
+    <plurals name="forget_kept_words">
+        <item quantity="one">Forget %1$d kept word</item>
+        <item quantity="other">Forget %1$d kept words</item>
+    </plurals>
+    <string name="auto_caps">Auto-capitalize</string>
+    <string name="auto_caps_note">Off by default: SwagKeys never turns shift on by itself. When on, shift engages where the app asks for capitals (start of a sentence, names, all-caps fields).</string>
 
     <string name="theme_system">Follow system</string>
     <string name="theme_dark">Dark (Nothing black)</string>
@@ -43,9 +52,10 @@
 
     <string name="try_hint">Type here to test: try \"hello friend this is so cool\"</string>
 
-    <string name="credits">Doto typeface © 2024 The Doto Project Authors (github.com/oliverlalan/Doto), licensed under the SIL Open Font License 1.1. Emoji list derived from Unicode emoji-test.txt, © 1991–2026 Unicode, Inc., under the Unicode License v3. Not affiliated with Nothing Technology Ltd.</string>
+    <string name="credits">Doto typeface © 2024 The Doto Project Authors (github.com/oliverlalan/Doto), licensed under the SIL Open Font License 1.1. Emoji list derived from Unicode emoji-test.txt, © 1991–2026 Unicode, Inc., under the Unicode License v3. Autocorrect word list derived from the Android Open Source Project LatinIME English dictionary, © The Android Open Source Project, under the Apache License 2.0. Not affiliated with Nothing Technology Ltd.</string>
     <string name="show_unicode_license">Show Unicode license</string>
     <string name="show_license">Show font license</string>
+    <string name="show_apache_license">Show word list license (Apache 2.0)</string>
 
     <string name="a11y_shift">Shift</string>
     <string name="a11y_shift_on">Shift, on</string>
@@ -73,9 +83,9 @@
     <string name="a11y_emoji_tones">%1$s, more skin tones</string>
     <string name="a11y_style_selected">%1$s, selected</string>
     <string name="a11y_style_chip">Text style: %1$s</string>
-    <string name="a11y_undo">Undo slang, restore %1$s</string>
+    <string name="a11y_undo">Undo, restore %1$s</string>
     <string name="a11y_replace_with">Replace with %1$s</string>
-    <string name="a11y_slang_on">Swag slang autocorrect, on</string>
-    <string name="a11y_slang_off">Swag slang autocorrect, off</string>
+    <string name="a11y_slang_on">Swag slang, on</string>
+    <string name="a11y_slang_off">Swag slang, off</string>
     <string name="a11y_settings">SwagKeys settings</string>
 </resources>

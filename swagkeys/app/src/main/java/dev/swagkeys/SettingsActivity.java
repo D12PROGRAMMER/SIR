@@ -69,13 +69,15 @@ public final class SettingsActivity extends Activity {
     private boolean updatingFonts;
     private final EnumMap<TextStyle, RadioButton> styleButtons = new EnumMap<>(TextStyle.class);
     private Switch slangSwitch;
+    private TextView keptWordsButton;
 
     /** Background thread for font import I/O (content providers may block while downloading). */
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
 
     // Held in a field: SharedPreferences keeps listeners in a WeakHashMap.
     private final SharedPreferences.OnSharedPreferenceChangeListener prefSync = (sp, key) -> {
-        if (key == null || Prefs.KEY_STYLE.equals(key) || Prefs.KEY_SLANG.equals(key)) {
+        if (key == null || Prefs.KEY_STYLE.equals(key) || Prefs.KEY_SLANG.equals(key)
+                || Prefs.KEY_KEPT_WORDS.equals(key)) {
             syncFromPrefs();
         }
     };
@@ -101,9 +103,10 @@ public final class SettingsActivity extends Activity {
         super.onPause();
     }
 
-    /** Reflects style and slang changes made from the keyboard (style chip, SWAG pill). */
+    /** Reflects changes made from the keyboard (style chip, SWAG pill, undone corrections). */
     private void syncFromPrefs() {
         if (slangSwitch == null) return;
+        keptWordsButton.setText(keptWordsLabel());
         RadioButton rb = styleButtons.get(prefs.style());
         if (rb != null && !rb.isChecked()) rb.setChecked(true);
         boolean slang = prefs.slang();
@@ -201,8 +204,22 @@ public final class SettingsActivity extends Activity {
         }));
         root.addView(dict);
 
+        // Autocorrect
+        root.addView(header("04  AUTOCORRECT"));
+        root.addView(toggle(getString(R.string.autocorrect_toggle), prefs.autocorrect(),
+                (b, on) -> prefs.setAutocorrect(on)));
+        root.addView(note(getString(R.string.autocorrect_note)));
+        keptWordsButton = button(keptWordsLabel(), v -> {
+            prefs.clearKeptWords();
+            keptWordsButton.setText(keptWordsLabel());
+        });
+        root.addView(keptWordsButton);
+        root.addView(toggle(getString(R.string.auto_caps), prefs.autoCaps(),
+                (b, on) -> prefs.setAutoCaps(on)));
+        root.addView(note(getString(R.string.auto_caps_note)));
+
         // Theme
-        root.addView(header("04  THEME"));
+        root.addView(header("05  THEME"));
         RadioGroup themes = new RadioGroup(this);
         String[][] themeOptions = {
                 {Prefs.THEME_SYSTEM, getString(R.string.theme_system)},
@@ -227,7 +244,7 @@ public final class SettingsActivity extends Activity {
         root.addView(themes);
 
         // Font
-        root.addView(header("05  ACCENT"));
+        root.addView(header("06  ACCENT"));
         RadioGroup accents = new RadioGroup(this);
         for (String[] a : Palette.ACCENTS) {
             RadioButton rb = radio(a[1]);
@@ -253,7 +270,7 @@ public final class SettingsActivity extends Activity {
         });
         root.addView(accents);
 
-        root.addView(header("06  FONT"));
+        root.addView(header("07  FONT"));
         root.addView(note(getString(R.string.font_note)));
         RadioGroup fonts = new RadioGroup(this);
         fontGroup = fonts;
@@ -284,21 +301,21 @@ public final class SettingsActivity extends Activity {
         });
 
         // Feedback
-        root.addView(header("07  KEYBOARD"));
+        root.addView(header("08  KEYBOARD"));
         root.addView(toggle(getString(R.string.number_row), prefs.numberRow(),
                 (b, on) -> prefs.setNumberRow(on)));
         root.addView(toggle(getString(R.string.animations), prefs.animations(),
                 (b, on) -> prefs.setAnimations(on)));
         root.addView(note(getString(R.string.animations_note)));
-        root.addView(header("08  GESTURES"));
+        root.addView(header("09  GESTURES"));
         root.addView(note(getString(R.string.gestures_note)));
 
-        root.addView(header("09  FEEDBACK"));
+        root.addView(header("10  FEEDBACK"));
         root.addView(toggle(getString(R.string.haptics), prefs.haptics(), (b, on) -> prefs.setHaptics(on)));
         root.addView(toggle(getString(R.string.sound), prefs.sound(), (b, on) -> prefs.setSound(on)));
 
         // Try it
-        root.addView(header("10  TRY IT"));
+        root.addView(header("11  TRY IT"));
         EditText field = new EditText(this);
         field.setId(R.id.try_field);
         field.setHint(R.string.try_hint);
@@ -314,7 +331,7 @@ public final class SettingsActivity extends Activity {
         root.addView(field, matchWrap(dp(8)));
 
         // Licenses
-        root.addView(header("11  CREDITS"));
+        root.addView(header("12  CREDITS"));
         root.addView(note(getString(R.string.credits)));
         TextView ofl = text(readAsset("fonts/OFL.txt"), 11, palette.textSecondary);
         ofl.setTypeface(Typeface.MONOSPACE);
@@ -330,6 +347,12 @@ public final class SettingsActivity extends Activity {
         root.addView(button(getString(R.string.show_unicode_license), v ->
                 unicode.setVisibility(unicode.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE)));
         root.addView(unicode);
+        TextView apache = text(readAsset("APACHE-LICENSE-2.0.txt"), 11, palette.textSecondary);
+        apache.setTypeface(Typeface.MONOSPACE);
+        apache.setVisibility(View.GONE);
+        root.addView(button(getString(R.string.show_apache_license), v ->
+                apache.setVisibility(apache.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE)));
+        root.addView(apache);
 
         setContentView(frame);
     }
@@ -366,6 +389,13 @@ public final class SettingsActivity extends Activity {
             getWindow().setStatusBarColor(palette.background);
             getWindow().setNavigationBarColor(palette.background);
         }
+    }
+
+    private String keptWordsLabel() {
+        int n = prefs.keptWords().size();
+        // Upper case like button() labels, since it is also set after the button is built.
+        return getResources().getQuantityString(R.plurals.forget_kept_words, n, n)
+                .toUpperCase(java.util.Locale.ROOT);
     }
 
     private String dictionaryText() {

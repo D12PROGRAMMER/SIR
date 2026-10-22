@@ -1,9 +1,10 @@
 # SwagKeys
 
 Android input method with a Nothing OS look: dot-matrix labels (Doto typeface), black/white
-surfaces, a red accent. Text styles are applied as you type and finished words can be swapped for slang automatically.
+surfaces, a red accent. Text styles are applied as you type, typos are fixed without touching
+capitalization, and finished words can be swapped for slang automatically.
 
-Prebuilt APK: [`dist/SwagKeys-1.2.1.apk`](dist/SwagKeys-1.2.1.apk) (Android 8.0 / API 26 or later,
+Prebuilt APK: [`dist/SwagKeys-1.3.0.apk`](dist/SwagKeys-1.3.0.apk) (Android 8.0 / API 26 or later,
 signed with a debug key; installs over earlier versions).
 
 ## Install
@@ -20,7 +21,9 @@ signed with a debug key; installs over earlier versions).
 | Animations | Glyph ripple through the dot grid on every key press, key press/spring-back, pop-in previews, sliding panels, and a decode effect with a SWAG pulse when slang kicks in. Off with the setting or when Android's Remove animations is on. |
 | Gestures | Swipe along the space bar to move the cursor; swipe left from delete to erase whole words (a bubble shows the count; slide back to cancel). Holding delete, cursor steps and word-count steps all vibrate (with the key-press haptic setting). |
 | Look | Dark/light/system theme; accent colour Nothing red, volt, cyan, purple or orange (text uses a contrast-checked shade on light backgrounds); optional number row. |
-| Swag slang | 89 single-word substitutions (hello → wassup, cool → lit, friend → homie, …), applied when a word is finished; replacements are plain text. Delete right after a substitution, or tap **UNDO**, to restore the word. |
+| Autocorrect | A finished word missing from the 172,956-word list is replaced with the most frequent word one edit away (transposition, missing/doubled/extra letter, QWERTY-neighbour substitution; three-letter words: transpositions only), only when it clearly beats the runner-up. The typed case pattern is kept (teh → the, Teh → The, TEH → THE); capitals, apostrophes and punctuation are never added (`i`, `monday`, `dont` stay). Left alone: chat words and abbreviations (bruh, ngl, cuz, smth), vowel-less words, dropped g's (goin), stretched or doubled endings (yesss, heyy), mixed case, digits, symbols. Delete right after a correction (or **UNDO**) restores the word and keeps it from then on (not learned in incognito/password fields). On by default; same fields as slang. |
+| Auto-capitalization | Off by default; when turned on in settings, shift follows the field's caps mode. |
+| Swag slang | 89 single-word substitutions (hello → wassup, cool → lit, friend → homie, …), applied when a word is finished, after autocorrect (hwllo → hello → wassup); replacements are plain text. Delete right after a substitution, or tap **UNDO**, to restore the word. |
 | Emoji | The emoji key (left of the comma) opens every fully-qualified emoji of Unicode Emoji 18.0: 1923 emoji in nine categories plus recently used, and 2040 skin-tone variants on long-press (dotted cells). Emoji the phone's font cannot draw are hidden. |
 | Where slang applies | Automatically in chat-style fields (multi-line or auto-correct). In single-line search, name and address fields it is only offered in the strip (tap to apply). Never in passwords, URLs, e-mail, number fields, or in words glued to other text (`#tags`, `@names`, `a.b`, `a_b`). |
 | Keyboard | Multi-touch roll-over, one-shot / double-tap / long-press shift, long-press top row for digits, key repeat on delete, symbol and number pads, editor-action Enter key, TalkBack support (explore by touch, lift to type). Switch keyboards by long-pressing the emoji key (next keyboard) or the space bar (picker). |
@@ -29,6 +32,10 @@ signed with a debug key; installs over earlier versions).
 Nothing's own NDot typefaces are licensed for Nothing brand use only, so they are not bundled.
 The emoji list is regenerated with `python3 tools/build_emoji.py emoji-test.txt app/src/main/assets/emoji.txt`
 from Unicode's [emoji-test.txt](https://unicode.org/Public/emoji/latest/emoji-test.txt) (Unicode License v3).
+The autocorrect word list is regenerated with
+`python3 tools/build_words.py en_US_wordlist.combined.gz app/src/main/assets/words.txt` from the AOSP
+[LatinIME dictionaries](https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/refs/heads/main/dictionaries/)
+(Apache License 2.0).
 
 ## Build
 

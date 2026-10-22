@@ -253,6 +253,7 @@ public class InputLogicTest {
         editor = new FakeEditor("");
         logic = new InputLogic(editor, null);
         editor.logic = logic;
+        logic.setAutoCapitalize(true);
         logic.startInput(editor.config(FieldConfig.Mode.STYLED, false, CAP_SENTENCES_TYPE, ACTION_NONE));
         assertTrue(logic.shouldAutoCapitalize());
         type("H");
@@ -313,6 +314,7 @@ public class InputLogicTest {
     public void capCharactersCapitalizesEveryLetter() {
         startWith(new FakeEditor(""), FieldConfig.text(FieldConfig.Mode.STYLED, false,
                 0x00000001 | 0x00001000, ACTION_NONE, 0, 0), TextStyle.NORMAL);
+        logic.setAutoCapitalize(true);
         assertTrue(logic.shouldAutoCapitalize());
         type("A");
         assertTrue(logic.shouldAutoCapitalize());
@@ -361,6 +363,7 @@ public class InputLogicTest {
         for (TextStyle s : new TextStyle[] {TextStyle.WIDE, TextStyle.STRIKE}) {
             startWith(new FakeEditor(""), FieldConfig.text(FieldConfig.Mode.STYLED, false,
                     CAP_SENTENCES_TYPE, ACTION_NONE, 0, 0), s);
+            logic.setAutoCapitalize(true);
             type("hi. ");
             assertTrue(s.name(), logic.shouldAutoCapitalize());
             type("x");
