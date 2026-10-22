@@ -39,7 +39,8 @@
 
     <string name="try_hint">Type here to test: try \"hello friend this is so cool\"</string>
 
-    <string name="credits">Doto typeface © 2024 The Doto Project Authors (github.com/oliverlalan/Doto), licensed under the SIL Open Font License 1.1. Not affiliated with Nothing Technology Ltd.</string>
+    <string name="credits">Doto typeface © 2024 The Doto Project Authors (github.com/oliverlalan/Doto), licensed under the SIL Open Font License 1.1. Emoji list derived from Unicode emoji-test.txt, © 1991–2026 Unicode, Inc., under the Unicode License v3. Not affiliated with Nothing Technology Ltd.</string>
+    <string name="show_unicode_license">Show Unicode license</string>
     <string name="show_license">Show font license</string>
 
     <string name="a11y_shift">Shift</string>
@@ -58,9 +59,12 @@
     <string name="a11y_emoji_people">People and gestures</string>
     <string name="a11y_emoji_nature">Animals and nature</string>
     <string name="a11y_emoji_food">Food and drink</string>
-    <string name="a11y_emoji_activity">Activities and travel</string>
+    <string name="a11y_emoji_travel">Travel and places</string>
+    <string name="a11y_emoji_activity">Activities</string>
     <string name="a11y_emoji_objects">Objects</string>
     <string name="a11y_emoji_symbols">Symbols</string>
+    <string name="a11y_emoji_flags">Flags</string>
+    <string name="a11y_emoji_tones">%1$s, more skin tones</string>
     <string name="a11y_style_selected">%1$s, selected</string>
     <string name="a11y_style_chip">Text style: %1$s</string>
     <string name="a11y_undo">Undo slang, restore %1$s</string>

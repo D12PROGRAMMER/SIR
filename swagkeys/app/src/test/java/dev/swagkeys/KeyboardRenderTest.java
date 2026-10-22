@@ -422,15 +422,79 @@ public class KeyboardRenderTest {
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null));
         // The first cell scrolled out of view, so its node is gone.
         assertTrue(provider.createAccessibilityNodeInfo(100000) == null);
-        // Tab "Symbols" (last) scrolls to its section.
-        AccessibilityNodeInfo symbolsTab = provider.createAccessibilityNodeInfo(500 + 6);
-        assertEquals("Symbols", symbolsTab.getContentDescription().toString());
-        assertTrue(provider.performAction(500 + 6, AccessibilityNodeInfo.ACTION_CLICK, null));
+        // Tab "Flags" (last) scrolls to its section.
+        AccessibilityNodeInfo flagsTab = provider.createAccessibilityNodeInfo(500 + 8);
+        assertEquals("Flags", flagsTab.getContentDescription().toString());
+        assertTrue(provider.performAction(500 + 8, AccessibilityNodeInfo.ACTION_CLICK, null));
         ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
         view.computeScroll();
         ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
         view.computeScroll();
         assertTrue(provider.createAccessibilityNodeInfo(100000) == null);
+    }
+
+    /** Scrolls the open emoji panel to tab {@code tab} and returns the virtual id of {@code emoji}. */
+    private int emojiVid(int tab, String emoji, String description) {
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        provider.performAction(500 + tab, AccessibilityNodeInfo.ACTION_CLICK, null);
+        for (int i = 0; i < 20; i++) {
+            ShadowLooper.idleMainLooper(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+            view.computeScroll();
+        }
+        AccessibilityNodeInfo host = provider.createAccessibilityNodeInfo(
+                AccessibilityNodeProvider.HOST_VIEW_ID);
+        for (int vid = 100000; vid < 100000 + 4000; vid++) {
+            AccessibilityNodeInfo n = provider.createAccessibilityNodeInfo(vid);
+            if (n != null && description.equals(String.valueOf(n.getContentDescription()))) return vid;
+        }
+        throw new AssertionError(emoji + " not visible; children=" + host.getChildCount());
+    }
+
+    @Test
+    public void longPressShowsSkinTonesAndSlideSelects() throws IOException {
+        tap(find(Key.CODE_EMOJI));
+        int vid = emojiVid(1, "👋", "👋, more skin tones");
+        android.graphics.Rect r = new android.graphics.Rect();
+        view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(vid).getBoundsInParent(r);
+        float[][] p = {{r.exactCenterX(), r.exactCenterY()}};
+        touch(MotionEvent.ACTION_DOWN, 0, p);
+        ShadowLooper.idleMainLooper(450, java.util.concurrent.TimeUnit.MILLISECONDS);
+        // Popup is open: base + 5 tones, each a virtual node.
+        AccessibilityNodeInfo tone2 = view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(702);
+        assertNotNull(tone2);
+        assertEquals("👋🏼", tone2.getContentDescription().toString());
+        shot("10_skin_tones");
+        android.graphics.Rect t = new android.graphics.Rect();
+        tone2.getBoundsInParent(t);
+        float[][] q = {{t.exactCenterX(), t.exactCenterY()}};
+        touch(MotionEvent.ACTION_MOVE, 0, q);
+        touch(MotionEvent.ACTION_UP, 0, q);
+        assertEquals(List.of("👋🏼"), emojis);
+        assertTrue(view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(702) == null);
+    }
+
+    @Test
+    public void shortTapOnToneableEmojiInsertsBase() {
+        tap(find(Key.CODE_EMOJI));
+        int vid = emojiVid(1, "👍", "👍, more skin tones");
+        android.graphics.Rect r = new android.graphics.Rect();
+        view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(vid).getBoundsInParent(r);
+        float[][] p = {{r.exactCenterX(), r.exactCenterY()}};
+        touch(MotionEvent.ACTION_DOWN, 0, p);
+        touch(MotionEvent.ACTION_UP, 0, p);
+        ShadowLooper.idleMainLooper(600, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertEquals(List.of("👍"), emojis);
+    }
+
+    @Test
+    public void accessibilityLongClickOpensStickyTonePicker() {
+        tap(find(Key.CODE_EMOJI));
+        int vid = emojiVid(1, "👍", "👍, more skin tones");
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        assertTrue(provider.performAction(vid, AccessibilityNodeInfo.ACTION_LONG_CLICK, null));
+        assertEquals("👍🏿", provider.createAccessibilityNodeInfo(705).getContentDescription().toString());
+        assertTrue(provider.performAction(705, AccessibilityNodeInfo.ACTION_CLICK, null));
+        assertEquals(List.of("👍🏿"), emojis);
     }
 
     @Test

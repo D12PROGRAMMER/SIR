@@ -286,6 +286,12 @@ public final class SettingsActivity extends Activity {
             ofl.setVisibility(show ? View.VISIBLE : View.GONE);
         }));
         root.addView(ofl);
+        TextView unicode = text(readAsset("UNICODE-LICENSE.txt"), 11, palette.textSecondary);
+        unicode.setTypeface(Typeface.MONOSPACE);
+        unicode.setVisibility(View.GONE);
+        root.addView(button(getString(R.string.show_unicode_license), v ->
+                unicode.setVisibility(unicode.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE)));
+        root.addView(unicode);
 
         setContentView(frame);
     }

@@ -37,6 +37,7 @@ public final class SwagKeysService extends InputMethodService
         logic.setStyle(prefs.style());
         logic.setSlangEnabled(prefs.slang());
         prefs.raw().registerOnSharedPreferenceChangeListener(prefListener);
+        EmojiData.preload(this);
     }
 
     @Override
