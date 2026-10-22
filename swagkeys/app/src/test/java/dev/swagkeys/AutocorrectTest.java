@@ -115,6 +115,7 @@ public class AutocorrectTest {
         assertEquals(WordList.KNOWN, WordList.kind(words.entry("monday")));
         assertEquals(WordList.KNOWN, WordList.kind(words.entry("colour")));
         assertEquals(WordList.WEAK, WordList.kind(words.entry("oday")));
+        assertEquals(WordList.KNOWN, WordList.kind(words.entry("kates")));
         assertTrue(WordList.frequency(words.entry("dont")) > 100);
     }
 
@@ -203,11 +204,13 @@ public class AutocorrectTest {
     }
 
     @Test
-    public void possessivesWithoutApostropheDoNotBlockCorrections() {
-        // "oday" (from "O'Day"), "amways" (from "Amway's") are much less likely than these.
+    public void possessivesWithoutApostropheStayButOtherNameFormsDoNotBlock() {
+        for (String w : new String[] {"megans", "Megans", "sams", "brians", "dans", "zoes",
+                "billys", "legos", "atms"}) {
+            assertNull(w, fix(w));
+        }
+        // "oday" (from "O'Day") is much less likely than "today".
         assertEquals("today", fix("oday"));
-        assertEquals("always", fix("amways"));
-        assertEquals("most", fix("mots"));
     }
 
     @Test
@@ -298,6 +301,46 @@ public class AutocorrectTest {
                     + style.apply(" ") + style.apply("friend") + style.apply(" ");
             assertEquals(style.name(), expected, editor.value());
         }
+    }
+
+    /** Types with the editor's selection updates {@code lag} keystrokes late. */
+    private void typeLagged(String s, int lag) {
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp == '<') logic.onDelete();
+            else logic.onCodePoint(cp);
+            editor.deliverAllBut(lag);
+        }
+        editor.deliverUpdates();
+    }
+
+    @Test
+    public void repeatedStatesUnderLagAreMatchedInOrder() {
+        for (int lag = 0; lag <= 6; lag++) {
+            start(true, false, TextStyle.NORMAL);
+            typeLagged("hello x<hapy ", lag);
+            assertEquals("lag " + lag, "hello happy ", editor.value());
+            start(true, false, TextStyle.NORMAL);
+            typeLagged("tehh< ", lag);
+            assertEquals("lag " + lag, "the ", editor.value());
+            assertEquals("lag " + lag, "teh", logic.undoableWord());
+        }
+    }
+
+    @Test
+    public void tapBackAfterSameLengthUndoIsAUserMove() {
+        start(true, false, TextStyle.NORMAL);
+        type("teh ");
+        type("<");
+        assertEquals("teh ", editor.value());
+        // The same-length revert changes neither selection nor composing: no report follows.
+        logic.moveCursor(-1);
+        editor.deliverUpdates();
+        editor.userMoveCursor(4);
+        editor.deliverUpdates();
+        type("hapy ");
+        assertEquals("teh happy ", editor.value());
     }
 
     @Test

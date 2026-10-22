@@ -83,6 +83,11 @@ public final class InputLogic {
      */
     private final int[] recentStates = new int[RECENT_STATES * 4];
     private int recentCount;
+    /**
+     * The editor state after this IME's last edit or the last adopted report, in the same
+     * form; an edit that leaves it unchanged is not reported by the editor at all.
+     */
+    private final int[] lastState = {-1, -1, -1, -1};
 
     /**
      * Last replacement (correction and/or slang), revertible by Delete or the strip while the
@@ -129,6 +134,7 @@ public final class InputLogic {
             selStart = selEnd;
             selEnd = t;
         }
+        setLastState(selStart, selEnd, -1, -1);
         clearUndo();
         notifyChanged();
     }
@@ -439,7 +445,11 @@ public final class InputLogic {
         for (int i = 0; i < count; i++) editor.sendKey(key);
         // The editor reports the new position through onUpdateSelection; with no key sent
         // nothing changes and no update follows, so the known position stays valid.
-        if (count > 0) selStart = selEnd = -1;
+        if (count > 0) {
+            selStart = selEnd = -1;
+            recentCount = 0;
+            setLastState(-1, -1, -1, -1);
+        }
         notifyChanged();
         return steps < 0 ? -count : count;
     }
@@ -619,7 +629,9 @@ public final class InputLogic {
         if (word.length() > 0 && composingStart >= 0 && candidatesStart == composingStart
                 && ns == ne && ns == candidatesEnd) {
             // A cursor at the end of a composing region that starts at this word's start is one
-            // of this IME's own setComposingText states, in whatever order updates arrive.
+            // of this IME's own setComposingText states, in whatever order updates arrive. The
+            // editor has caught up to it: forget the states recorded before it.
+            isRecentState(ns, ne, candidatesStart, candidatesEnd);
             return;
         }
         if (selStart >= 0 && isRecentState(ns, ne, candidatesStart, candidatesEnd)) {
@@ -636,10 +648,13 @@ public final class InputLogic {
                     // The update may be stale; expect the state after the latest keystroke.
                     composingStart = candidatesStart;
                     selStart = selEnd = composingStart + style.apply(word).length();
+                    setLastState(selStart, selEnd, composingStart, selEnd);
                 } else {
                     selStart = ns;
                     selEnd = ne;
+                    setLastState(ns, ne, candidatesStart, candidatesEnd);
                 }
+                recentCount = 0;
                 notifyChanged();
                 return;
             }
@@ -652,11 +667,13 @@ public final class InputLogic {
         phantomSpaceAt = -1;
         keepPending = null;
         recentCount = 0;
+        setLastState(ns, ne, candidatesStart, candidatesEnd);
         clearUndo();
         if (word.length() > 0) {
             word.setLength(0);
             composingStart = -1;
             editor.finishComposingText();
+            setLastState(ns, ne, -1, -1);
         }
         notifyChanged();
     }
@@ -750,28 +767,43 @@ public final class InputLogic {
         expectState();
     }
 
-    /** Records the state after an edit of this IME, which the editor reports (maybe late). */
+    /**
+     * Records the state after an edit of this IME, which the editor reports (maybe late). An
+     * edit that leaves selection and composing region as they were (a same-length undo, a word
+     * delete with nothing to delete) is not reported, so it is not recorded either.
+     */
     private void expectState() {
         if (selStart < 0) return;
+        boolean composing = word.length() > 0 && composingStart >= 0;
+        int cs = composing ? composingStart : -1;
+        int ce = composing ? selEnd : -1;
+        if (lastState[0] == selStart && lastState[1] == selEnd && lastState[2] == cs
+                && lastState[3] == ce) {
+            return;
+        }
+        setLastState(selStart, selEnd, cs, ce);
         if (recentCount == RECENT_STATES) {
             System.arraycopy(recentStates, 4, recentStates, 0, (RECENT_STATES - 1) * 4);
             recentCount--;
         }
-        int i = recentCount * 4;
-        boolean composing = word.length() > 0 && composingStart >= 0;
-        recentStates[i] = selStart;
-        recentStates[i + 1] = selEnd;
-        recentStates[i + 2] = composing ? composingStart : -1;
-        recentStates[i + 3] = composing ? selEnd : -1;
+        System.arraycopy(lastState, 0, recentStates, recentCount * 4, 4);
         recentCount++;
+    }
+
+    private void setLastState(int start, int end, int composingStart, int composingEnd) {
+        lastState[0] = start;
+        lastState[1] = end;
+        lastState[2] = composingStart;
+        lastState[3] = composingEnd;
     }
 
     /**
      * Whether an update reports a state recorded by {@link #expectState}; that state and the
-     * ones before it are then forgotten, since the editor has caught up to it.
+     * ones before it are then forgotten, since the editor has caught up to it. Updates arrive in
+     * order, so the oldest equal state is the one reported ("x", Delete repeats a state).
      */
     private boolean isRecentState(int start, int end, int candidatesStart, int candidatesEnd) {
-        for (int k = recentCount - 1; k >= 0; k--) {
+        for (int k = 0; k < recentCount; k++) {
             int i = k * 4;
             if (recentStates[i] == start && recentStates[i + 1] == end
                     && recentStates[i + 2] == candidatesStart && recentStates[i + 3] == candidatesEnd) {

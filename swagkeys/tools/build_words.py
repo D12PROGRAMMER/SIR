@@ -11,9 +11,10 @@ Output (UTF-8, LF line ends, sorted by the UTF-8 bytes of the word, one entry pe
 words lowercased, frequencies 0-255 from the source lists):
   "word<TAB>F"   a correction target: lowercase a-z only, not offensive, F > 0 (TARGETS only)
   "word<TAB>=F"  known: never corrected; competes as a candidate that is never returned
-                 (proper nouns, offensive words, other lists' words, and contractions without
-                 their apostrophe such as "dont", so they are left as typed)
-  "word<TAB>~F"  weak: a capitalized possessive without its apostrophe ("kates" from "Kate's");
+                 (proper nouns, offensive words, other lists' words, contractions without
+                 their apostrophe such as "dont", and possessives such as "kates" from
+                 "Kate's", so they are left as typed)
+  "word<TAB>~F"  weak: another capitalized word without its apostrophe ("oday" from "O'Day");
                  when typed it competes as itself instead of blocking corrections outright
 """
 import gzip
@@ -50,9 +51,11 @@ def read(src, with_targets):
             add(lw, TARGET if target else KNOWN, freq)
             if "'" in lw or "’" in lw:
                 stripped = lw.replace("'", "").replace("’", "")
-                # Contractions typed without the apostrophe are meant; possessives of names
-                # ("O'Day" -> "oday") are mostly collisions with typos of other words.
-                add(stripped, KNOWN if word == lw else WEAK, freq)
+                # Contractions and possessives typed without the apostrophe are meant ("dont",
+                # "kates"); other capitalized forms ("O'Day" -> "oday") are mostly collisions
+                # with typos of other words.
+                possessive = re.search(r"['’]s$", word) is not None
+                add(stripped, KNOWN if word == lw or possessive else WEAK, freq)
 
 
 out = sys.argv[2]

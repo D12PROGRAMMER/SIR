@@ -20,6 +20,8 @@ class FakeEditor implements Editor {
     private int batchDepth;
     private int reportedSelStart;
     private int reportedSelEnd;
+    private int reportedCompStart = -1;
+    private int reportedCompEnd = -1;
     private final List<int[]> pending = new ArrayList<>();
 
     FakeEditor(String initial) {
@@ -55,7 +57,12 @@ class FakeEditor implements Editor {
 
     /** Delivers every queued update except the most recent (an editor lagging one keystroke). */
     void deliverAllButLast() {
-        while (pending.size() > 1) deliverOne();
+        deliverAllBut(1);
+    }
+
+    /** Delivers every queued update except the {@code n} most recent. */
+    void deliverAllBut(int n) {
+        while (pending.size() > n) deliverOne();
     }
 
     /** User taps to place the cursor (composing span is left in place, as TextView does). */
@@ -81,9 +88,17 @@ class FakeEditor implements Editor {
 
     private void changed() {
         if (batchDepth > 0) return;
+        // Like InputMethodManager.updateSelection: nothing is reported if neither the selection
+        // nor the composing region changed (e.g. a same-length replacement).
+        if (selStart == reportedSelStart && selEnd == reportedSelEnd
+                && compStart == reportedCompStart && compEnd == reportedCompEnd) {
+            return;
+        }
         pending.add(new int[] {reportedSelStart, reportedSelEnd, selStart, selEnd, compStart, compEnd});
         reportedSelStart = selStart;
         reportedSelEnd = selEnd;
+        reportedCompStart = compStart;
+        reportedCompEnd = compEnd;
     }
 
     private void replace(CharSequence t, boolean keepComposing) {

@@ -263,6 +263,19 @@ public class InputLogicTest {
     }
 
     @Test
+    public void appClearingFieldAfterEmptyWordDeleteResetsTheWord() {
+        start("", FieldConfig.Mode.STYLED, true, TextStyle.NORMAL);
+        // A word-delete swipe on an empty field changes nothing and is never reported.
+        logic.deleteWords(1);
+        editor.deliverUpdates();
+        type("hi");
+        editor.appSetText("");
+        editor.deliverUpdates();
+        type("o");
+        assertEquals("o", editor.value());
+    }
+
+    @Test
     public void rawModeSendsKeyChars() {
         start("", FieldConfig.Mode.RAW, false, TextStyle.LEET);
         type("ls -la");
