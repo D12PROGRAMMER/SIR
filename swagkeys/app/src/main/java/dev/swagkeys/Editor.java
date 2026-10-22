@@ -16,6 +16,13 @@ public interface Editor {
     /** Returns the selected text, or {@code null} if none or unavailable. */
     CharSequence getSelectedText();
 
+    /**
+     * The editor's current selection as {start, end}, read synchronously, so it reflects every
+     * call made so far (unlike onUpdateSelection reports, which can lag); {@code null} if the
+     * editor cannot tell.
+     */
+    int[] getSelection();
+
     void setComposingText(CharSequence text);
 
     void commitText(CharSequence text);

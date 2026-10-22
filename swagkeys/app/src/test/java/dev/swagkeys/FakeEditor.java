@@ -86,8 +86,28 @@ class FakeEditor implements Editor {
         changed();
     }
 
+    /** The app removes the composing span without changing text or cursor. */
+    void appRemoveComposing() {
+        compStart = compEnd = -1;
+        changed();
+    }
+
+    /**
+     * When set, changes are not reported one by one: {@link #flush} reports the state reached
+     * since the last report, as editors that report once per frame or batch do.
+     */
+    boolean coalesce;
+
+    void flush() {
+        report();
+    }
+
     private void changed() {
-        if (batchDepth > 0) return;
+        if (batchDepth > 0 || coalesce) return;
+        report();
+    }
+
+    private void report() {
         // Like InputMethodManager.updateSelection: nothing is reported if neither the selection
         // nor the composing region changed (e.g. a same-length replacement).
         if (selStart == reportedSelStart && selEnd == reportedSelEnd
@@ -125,6 +145,14 @@ class FakeEditor implements Editor {
     @Override
     public CharSequence getTextBeforeCursor(int n) {
         return text.substring(Math.max(0, selStart - n), selStart);
+    }
+
+    /** Whether {@link #getSelection} answers (some editors cannot tell). */
+    boolean selectionReadable = true;
+
+    @Override
+    public int[] getSelection() {
+        return selectionReadable ? new int[] {selStart, selEnd} : null;
     }
 
     @Override

@@ -344,6 +344,132 @@ public class AutocorrectTest {
     }
 
     @Test
+    public void tapAfterCoalescedBurstIsAUserMove() {
+        // ',' Delete '!' reach the editor in one frame and are reported once.
+        startWith("hi");
+        editor.coalesce = true;
+        type(",<!");
+        editor.flush();
+        editor.deliverUpdates();
+        editor.userMoveCursor(2);
+        editor.flush();
+        editor.deliverUpdates();
+        editor.coalesce = false;
+        type(" tehx< ");
+        assertEquals("hi the !", editor.value());
+        assertEquals("teh", logic.undoableWord());
+    }
+
+    @Test
+    public void tapAfterUnreportedBurstIsAUserMove() {
+        // '.' Delete end where the editor last reported: nothing is reported at all.
+        startWith("ab cd");
+        editor.userMoveCursor(2);
+        editor.deliverUpdates();
+        editor.coalesce = true;
+        type(".<");
+        editor.flush();
+        editor.deliverUpdates();
+        editor.userMoveCursor(3);
+        editor.flush();
+        editor.deliverUpdates();
+        editor.coalesce = false;
+        type("teh ");
+        assertEquals("ab the cd", editor.value());
+        assertEquals("teh", logic.undoableWord());
+    }
+
+    @Test
+    public void appClearAfterCoalescedBurstResetsTheWord() {
+        startWith("");
+        editor.coalesce = true;
+        type("o<o");
+        editor.flush();
+        editor.deliverUpdates();
+        editor.appSetText("");
+        editor.flush();
+        editor.deliverUpdates();
+        editor.coalesce = false;
+        type("k");
+        assertEquals("k", editor.value());
+    }
+
+    @Test
+    public void coalescedTapIntoComposingWordIsAUserMove() {
+        startWith("");
+        type("hi ");
+        editor.coalesce = true;
+        type("b");
+        editor.userMoveCursor(3);
+        editor.flush();
+        editor.deliverUpdates();
+        editor.coalesce = false;
+        type("o");
+        assertEquals("hi ob", editor.value());
+    }
+
+    @Test
+    public void appRemovingTheComposingSpanEndsTheWord() {
+        startWith("");
+        type("ahi");
+        editor.appRemoveComposing();
+        editor.deliverUpdates();
+        type("o");
+        assertEquals("ahio", editor.value());
+    }
+
+    @Test
+    public void typingWhileArrowReportsLag() {
+        for (int lag = 0; lag <= 3; lag++) {
+            startWith("so ok");
+            logic.moveCursor(-2);
+            editor.deliverAllBut(lag);
+            typeLagged("teh ", lag);
+            assertEquals("lag " + lag, "so the ok", editor.value());
+            assertEquals("lag " + lag, "teh", logic.undoableWord());
+        }
+    }
+
+    @Test
+    public void lateReportsAfterWordDelete() {
+        for (TextStyle style : new TextStyle[] {TextStyle.BOLD, TextStyle.CURSED, TextStyle.NORMAL}) {
+            for (int lag = 0; lag <= 6; lag++) {
+                start(true, false, style);
+                type("hi x");
+                logic.deleteWords(2);
+                editor.deliverAllBut(lag);
+                typeLagged("teh ", lag);
+                assertEquals(style + " lag " + lag, style.apply("the") + style.apply(" "),
+                        editor.value());
+                assertEquals(style + " lag " + lag, "teh", logic.undoableWord());
+            }
+        }
+    }
+
+    @Test
+    public void withoutSelectionReadsTheReportHeuristicStillTracksTaps() {
+        startWith("ab cd");
+        editor.selectionReadable = false;
+        editor.userMoveCursor(2);
+        editor.deliverUpdates();
+        type(" teh");
+        editor.userMoveCursor(0);
+        editor.deliverUpdates();
+        type("x");
+        assertEquals("xab teh cd", editor.value());
+    }
+
+    /** Starts a chat field holding {@code text}, cursor at its end. */
+    private void startWith(String text) {
+        start(true, false, TextStyle.NORMAL);
+        editor.appSetText(text);
+        logic.startInput(new FieldConfig(FieldConfig.Mode.STYLED, FieldConfig.Layout.TEXT,
+                true, true, CAP_SENTENCES_TYPE, false, ACTION_NONE, ACTION_NONE, null,
+                text.length(), text.length()));
+        editor.deliverUpdates();
+    }
+
+    @Test
     public void lateUpdatesStillKeepAWordAfterDelete() {
         start(true, false, TextStyle.NORMAL);
         typeLagged("hapy < ok ");
