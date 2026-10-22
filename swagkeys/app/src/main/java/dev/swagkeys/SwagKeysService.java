@@ -36,9 +36,21 @@ public final class SwagKeysService extends InputMethodService
     /** Words the user kept by undoing their correction (from {@link Prefs#keptWords()}). */
     private Set<String> keptWords;
 
+    /** The last correction, since the same word is asked for on every state change. */
+    private String lastCorrected;
+    private String lastCorrection;
+    private WordList lastCorrectionList;
+
     /** Corrects against the word list once it has loaded; until then words are kept as typed. */
-    private final InputLogic.Corrector corrector =
-            word -> Autocorrect.correct(WordList.peek(), word, keptWords);
+    private final InputLogic.Corrector corrector = word -> {
+        WordList list = WordList.peek();
+        if (list != lastCorrectionList || !word.equals(lastCorrected)) {
+            lastCorrection = Autocorrect.correct(list, word, keptWords);
+            lastCorrected = word;
+            lastCorrectionList = list;
+        }
+        return lastCorrection;
+    };
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
             (sp, key) -> onPreferenceChanged(key);
@@ -190,6 +202,7 @@ public final class SwagKeysService extends InputMethodService
                 break;
             case Prefs.KEY_KEPT_WORDS:
                 keptWords = prefs.keptWords();
+                lastCorrected = null;
                 onInputStateChanged();
                 break;
             case Prefs.KEY_FONT:
@@ -233,6 +246,7 @@ public final class SwagKeysService extends InputMethodService
         if (!allowsLearning(getCurrentInputEditorInfo())) return;
         String lower = word.toLowerCase(Locale.ROOT);
         keptWords.add(lower);
+        lastCorrected = null;
         prefs.keepWord(lower);
     }
 

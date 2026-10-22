@@ -71,7 +71,7 @@ public class AutocorrectTest {
         assertEquals(-1, words.lookup("zzzzqx"));
         assertEquals(-1, words.lookup(""));
         assertEquals(-1, words.lookup("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
-        assertEquals(-1, words.lookup("￿"));
+        assertEquals(-1, words.lookup("\uFFFF"));
     }
 
     @Test
@@ -85,6 +85,37 @@ public class AutocorrectTest {
         assertEquals(-1, w.lookup("abcd"));
         assertEquals(0, new WordList(new byte[0]).size());
         assertEquals(-1, new WordList(new byte[0]).lookup("a"));
+    }
+
+    @Test
+    public void wordListEntryKindsAndCrlf() {
+        WordList w = new WordList("abc\t5\r\nabd\t=9\r\n\r\nabe\t~3\r\nabf\r\nabg\t0\n"
+                .getBytes(StandardCharsets.UTF_8));
+        assertEquals(5, w.size());
+        assertEquals(WordList.TARGET, WordList.kind(w.entry("abc")));
+        assertEquals(5, WordList.frequency(w.entry("abc")));
+        assertEquals(WordList.KNOWN, WordList.kind(w.entry("abd")));
+        assertEquals(9, WordList.frequency(w.entry("abd")));
+        assertEquals(WordList.WEAK, WordList.kind(w.entry("abe")));
+        assertEquals(3, WordList.frequency(w.entry("abe")));
+        assertEquals(WordList.KNOWN, WordList.kind(w.entry("abf")));
+        // A target without a frequency is only known.
+        assertEquals(WordList.KNOWN, WordList.kind(w.entry("abg")));
+        assertEquals(5, w.lookup("abc"));
+        assertEquals(0, w.lookup("abd"));
+        assertEquals(0, w.lookup("abe"));
+        assertEquals(-1, w.lookup("ab"));
+        assertEquals(-1, w.lookup(""));
+    }
+
+    @Test
+    public void bundledListHasKindsForContractionsNamesAndPossessives() {
+        assertEquals(WordList.KNOWN, WordList.kind(words.entry("dont")));
+        assertEquals(WordList.KNOWN, WordList.kind(words.entry("wasnt")));
+        assertEquals(WordList.KNOWN, WordList.kind(words.entry("monday")));
+        assertEquals(WordList.KNOWN, WordList.kind(words.entry("colour")));
+        assertEquals(WordList.WEAK, WordList.kind(words.entry("oday")));
+        assertTrue(WordList.frequency(words.entry("dont")) > 100);
     }
 
     // ---------------------------------------------------------------- corrections
@@ -162,6 +193,24 @@ public class AutocorrectTest {
     }
 
     @Test
+    public void typosThatMayMeanAKnownWordAreLeftAlone() {
+        // Days, contractions without apostrophes and UK spellings can't be suggested, but a
+        // typo that fits them about as well is not turned into something else.
+        for (String w : new String[] {"monay", "mondy", "Monay", "havetn", "coulnt", "wsant",
+                "thetre", "theure", "colur", "honur", "jine", "dient", "kates"}) {
+            assertNull(w, fix(w));
+        }
+    }
+
+    @Test
+    public void possessivesWithoutApostropheDoNotBlockCorrections() {
+        // "oday" (from "O'Day"), "amways" (from "Amway's") are much less likely than these.
+        assertEquals("today", fix("oday"));
+        assertEquals("always", fix("amways"));
+        assertEquals("most", fix("mots"));
+    }
+
+    @Test
     public void keptWordsAreNotCorrected() {
         kept.add("teh");
         assertNull(fix("teh"));
@@ -218,6 +267,55 @@ public class AutocorrectTest {
             else logic.onCodePoint(cp);
             editor.deliverUpdates();
         }
+    }
+
+    /** Types like {@link #type}, with the editor's selection updates one keystroke late. */
+    private void typeLagged(String s) {
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp == '<') logic.onDelete();
+            else logic.onCodePoint(cp);
+            editor.deliverAllButLast();
+        }
+        editor.deliverUpdates();
+    }
+
+    @Test
+    public void lateUpdatesKeepTheUndoOfStyledCorrections() {
+        for (TextStyle style : new TextStyle[] {TextStyle.STRIKE, TextStyle.BOLD, TextStyle.CURSED,
+                TextStyle.NORMAL}) {
+            start(true, false, style);
+            typeLagged("heello ");
+            assertEquals(style.name(), style.apply("hello "), editor.value());
+            assertEquals(style.name(), "heello", logic.undoableWord());
+            typeLagged("<");
+            assertEquals(style.name(), style.apply("heello "), editor.value());
+            start(true, false, style);
+            typeLagged("heello wrold friend ");
+            // Each word is styled on its own (CURSED marks depend on the letter's position).
+            String expected = style.apply("hello") + style.apply(" ") + style.apply("world")
+                    + style.apply(" ") + style.apply("friend") + style.apply(" ");
+            assertEquals(style.name(), expected, editor.value());
+        }
+    }
+
+    @Test
+    public void lateUpdatesStillKeepAWordAfterDelete() {
+        start(true, false, TextStyle.NORMAL);
+        typeLagged("hapy < ok ");
+        assertEquals("hapy  ok ", editor.value());
+        assertEquals(Collections.singletonList("hapy"), keptEvents);
+    }
+
+    @Test
+    public void closingQuoteAfterPeriodKeepsTheCorrection() {
+        start(true, false, TextStyle.NORMAL);
+        type("she said 'so hapy.' ok \u2018so hapy.\u2019 ok ");
+        assertEquals("she said 'so happy.' ok \u2018so happy.\u2019 ok ", editor.value());
+        start(true, false, TextStyle.NORMAL);
+        type("teh.com ");
+        assertEquals("teh.com ", editor.value());
     }
 
     @Test

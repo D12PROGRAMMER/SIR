@@ -82,12 +82,21 @@ public final class Autocorrect {
         Case pattern = casePattern(typed);
         if (pattern == null) return null; // ALL CAPS (acronyms), mixed case, non-letters
         String w = typed.toLowerCase(Locale.ROOT);
-        if (words.lookup(w) >= 0 || isChatWord(w) || (never != null && never.contains(w))
+        int typedEntry = words.entry(w);
+        boolean weak = typedEntry >= 0 && WordList.kind(typedEntry) == WordList.WEAK;
+        if ((typedEntry >= 0 && !weak) || isChatWord(w) || (never != null && never.contains(w))
                 || hasStretch(w) || (n >= 4 && !hasVowel(w)) || isDroppedG(words, w)
                 || isDoubledEnding(words, w)) {
             return null;
         }
         Map<String, Integer> scores = new HashMap<>();
+        // Known words the user may mean compete with corrections but are never returned.
+        Set<String> keep = new HashSet<>();
+        // A weak word ("kates", from "Kate's") competes as typed, at no edit cost.
+        if (weak) {
+            scores.put(w, WordList.frequency(typedEntry));
+            keep.add(w);
+        }
         char[] c = w.toCharArray();
         // Typed three-letter non-words are mostly abbreviations ("cuz", "abt").
         boolean shortWord = n <= 3;
@@ -98,7 +107,7 @@ public final class Autocorrect {
             char[] t = c.clone();
             t[i] = c[i + 1];
             t[i + 1] = c[i];
-            score(words, new String(t), COST_TRANSPOSE, minFrequency, scores);
+            score(words, new String(t), COST_TRANSPOSE, minFrequency, scores, keep);
         }
         // Substitution: a neighbouring key ("hwllo"), or a vowel for a vowel ("seperate").
         for (int i = 0; i < n; i++) {
@@ -108,7 +117,7 @@ public final class Autocorrect {
                 if (!near && (shortWord || !isVowel(c[i]) || !isVowel(x))) continue;
                 char[] t = c.clone();
                 t[i] = x;
-                score(words, new String(t), near ? COST_SUB_NEAR : COST_SUB_FAR, minFrequency, scores);
+                score(words, new String(t), near ? COST_SUB_NEAR : COST_SUB_FAR, minFrequency, scores, keep);
             }
         }
         // Deletion: the typed word has an extra letter ("heello", "heklo"). An extra first or
@@ -118,19 +127,20 @@ public final class Autocorrect {
             boolean near = (i > 0 && adjacent(c[i - 1], c[i])) || (i + 1 < n && adjacent(c[i + 1], c[i]));
             if ((i == 0 || i == n - 1) && !doubled && !near) continue;
             String t = w.substring(0, i) + w.substring(i + 1);
-            score(words, t, doubled ? COST_DELETE_DOUBLE : near ? COST_DELETE_NEAR : COST_DELETE, 1, scores);
+            score(words, t, doubled ? COST_DELETE_DOUBLE : near ? COST_DELETE_NEAR : COST_DELETE, 1, scores, keep);
         }
         // Insertion: the typed word is missing a letter ("hapy", "helo").
         for (int i = 0; i <= n && !shortWord; i++) {
             for (char x = 'a'; x <= 'z'; x++) {
                 boolean doubled = (i > 0 && c[i - 1] == x) || (i < n && c[i] == x);
                 String t = w.substring(0, i) + x + w.substring(i);
-                score(words, t, doubled ? COST_INSERT_DOUBLE : COST_INSERT, 1, scores);
+                score(words, t, doubled ? COST_INSERT_DOUBLE : COST_INSERT, 1, scores, keep);
             }
         }
         String best = null;
         int bestScore = Integer.MIN_VALUE;
         int second = Integer.MIN_VALUE;
+        // The runner-up may be a known word: "monay" is as likely "monday" as "money".
         for (Map.Entry<String, Integer> e : scores.entrySet()) {
             int s = e.getValue();
             if (s > bestScore || (s == bestScore && e.getKey().compareTo(best) < 0)) {
@@ -141,7 +151,11 @@ public final class Autocorrect {
                 second = s;
             }
         }
-        if (best == null || bestScore < minScore(n)) return null;
+        if (best == null || keep.contains(best) || bestScore < minScore(n)) return null;
+        // A known word that is itself a good match ("monay" -> "monday") makes the typo ambiguous.
+        for (String k : keep) {
+            if (scores.get(k) >= minScore(n)) return null;
+        }
         if (second != Integer.MIN_VALUE && bestScore - second < MIN_MARGIN) return null;
         return applyCase(best, pattern);
     }
@@ -155,10 +169,16 @@ public final class Autocorrect {
     }
 
     private static void score(WordList words, String candidate, int cost, int minFrequency,
-            Map<String, Integer> scores) {
+            Map<String, Integer> scores, Set<String> keep) {
         if (candidate.length() < 2) return;
-        int f = words.lookup(candidate);
-        if (f <= 0 || f < minFrequency) return; // unknown, known but never suggested, or too rare
+        int e = words.entry(candidate);
+        if (e < 0) return;
+        int f = WordList.frequency(e);
+        if (WordList.kind(e) == WordList.TARGET) {
+            if (f < minFrequency) return; // too rare to be what a short typo meant
+        } else {
+            keep.add(candidate);
+        }
         int s = f - cost;
         Integer prev = scores.get(candidate);
         if (prev == null || s > prev) scores.put(candidate, s);

@@ -28,6 +28,7 @@ public final class InputLogic {
     }
 
     private static final int GRAPHEME_LOOKBEHIND = 64;
+    private static final int RECENT_STATES = 8;
     private static final int WORD_LOOKBEHIND = 1024;
     /** KeyEvent.KEYCODE_DPAD_LEFT / KEYCODE_DPAD_RIGHT. */
     static final int KEYCODE_DPAD_LEFT = 21;
@@ -76,6 +77,12 @@ public final class InputLogic {
     private int selEnd = -1;
     /** Cursor offset after a picked suggestion where a space is owed, or -1. */
     private int phantomSpaceAt = -1;
+    /**
+     * Editor states this IME produced that the editor may still report late, oldest first:
+     * selection start and end, composing start and end (-1 when not composing).
+     */
+    private final int[] recentStates = new int[RECENT_STATES * 4];
+    private int recentCount;
 
     /**
      * Last replacement (correction and/or slang), revertible by Delete or the strip while the
@@ -107,6 +114,7 @@ public final class InputLogic {
     public void startInput(FieldConfig config) {
         this.config = config;
         keepPending = null;
+        recentCount = 0;
         if (word.length() > 0) {
             // A reset while composing must not leave a region that the next keystroke replaces.
             editor.finishComposingText();
@@ -291,9 +299,10 @@ public final class InputLogic {
                 commitWord(Slang.NONE, " ");
             }
         }
-        if (isWordCodePoint(cp) && word.length() == 0 && undoAvailable()
+        if (Character.isLetterOrDigit(cp) && word.length() == 0 && undoAvailable()
                 && (".".equals(undoSeparator) || ":".equals(undoSeparator))) {
-            // The token continues ("good.com", "best:"): take the replacement back.
+            // The token continues ("good.com", "best:D"): take the replacement back. A quote
+            // after the period ("'so happy.'") closes the sentence instead.
             revertReplacement(Keep.NEVER);
         }
         clearUndo();
@@ -369,6 +378,7 @@ public final class InputLogic {
                 editor.setComposingText("");
                 if (composingStart >= 0) selStart = selEnd = composingStart;
                 composingStart = -1;
+                expectState();
             } else {
                 showComposing();
             }
@@ -477,6 +487,7 @@ public final class InputLogic {
                 }
             }
         }
+        expectState();
         notifyChanged();
     }
 
@@ -573,6 +584,7 @@ public final class InputLogic {
         if (selStart >= 0) {
             selStart = selEnd = selStart - undoCommitted.length() + undoRevert.length();
         }
+        expectState();
         phantomSpaceAt = -1;
         String kept = undoKeepsWord && keep != Keep.NEVER ? undoOriginalWord : null;
         clearUndo();
@@ -610,6 +622,11 @@ public final class InputLogic {
             // of this IME's own setComposingText states, in whatever order updates arrive.
             return;
         }
+        if (selStart >= 0 && isRecentState(ns, ne, candidatesStart, candidatesEnd)) {
+            // A late report of an earlier edit (e.g. the composing word just before it was
+            // committed shorter, as corrections do in multi-unit styles).
+            return;
+        }
         if (selStart < 0) {
             // Positions were unknown; adopt them if consistent with the composing state.
             boolean consistent = word.length() == 0
@@ -634,6 +651,7 @@ public final class InputLogic {
         selEnd = ne;
         phantomSpaceAt = -1;
         keepPending = null;
+        recentCount = 0;
         clearUndo();
         if (word.length() > 0) {
             word.setLength(0);
@@ -729,6 +747,41 @@ public final class InputLogic {
         } else {
             selStart = selEnd = -1;
         }
+        expectState();
+    }
+
+    /** Records the state after an edit of this IME, which the editor reports (maybe late). */
+    private void expectState() {
+        if (selStart < 0) return;
+        if (recentCount == RECENT_STATES) {
+            System.arraycopy(recentStates, 4, recentStates, 0, (RECENT_STATES - 1) * 4);
+            recentCount--;
+        }
+        int i = recentCount * 4;
+        boolean composing = word.length() > 0 && composingStart >= 0;
+        recentStates[i] = selStart;
+        recentStates[i + 1] = selEnd;
+        recentStates[i + 2] = composing ? composingStart : -1;
+        recentStates[i + 3] = composing ? selEnd : -1;
+        recentCount++;
+    }
+
+    /**
+     * Whether an update reports a state recorded by {@link #expectState}; that state and the
+     * ones before it are then forgotten, since the editor has caught up to it.
+     */
+    private boolean isRecentState(int start, int end, int candidatesStart, int candidatesEnd) {
+        for (int k = recentCount - 1; k >= 0; k--) {
+            int i = k * 4;
+            if (recentStates[i] == start && recentStates[i + 1] == end
+                    && recentStates[i + 2] == candidatesStart && recentStates[i + 3] == candidatesEnd) {
+                int keep = recentCount - k - 1;
+                System.arraycopy(recentStates, (k + 1) * 4, recentStates, 0, keep * 4);
+                recentCount = keep;
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -770,6 +823,7 @@ public final class InputLogic {
         wordAttached = false;
         composingStart = -1;
         selStart = selEnd = base >= 0 ? base + text.length() : -1;
+        expectState();
         if (replacement != null && !text.isEmpty()) {
             undoCommitted = text;
             undoRevert = style.apply(raw) + styledSep;
@@ -787,6 +841,7 @@ public final class InputLogic {
         int base = selStart;
         editor.commitText(text);
         selStart = selEnd = base >= 0 ? base + text.length() : -1;
+        expectState();
     }
 
     private void deleteBeforeCursor() {
@@ -794,6 +849,7 @@ public final class InputLogic {
         if (hasSelection) {
             editor.sendDeleteKey();
             if (selStart >= 0) selEnd = selStart;
+            expectState();
             return;
         }
         CharSequence before = editor.getTextBeforeCursor(GRAPHEME_LOOKBEHIND);
@@ -810,6 +866,7 @@ public final class InputLogic {
         int n = lastGraphemeLength(before.toString());
         editor.deleteSurroundingText(n, 0);
         if (selStart >= 0) selStart = selEnd = Math.max(0, selStart - n);
+        expectState();
     }
 
     private boolean hasSelectedText() {
