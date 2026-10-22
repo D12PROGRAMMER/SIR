@@ -38,6 +38,9 @@ public final class InputLogic {
     /** Replacement of a finished word (typo correction, then slang): none, automatic, or picked. */
     private enum Slang { NONE, AUTO, FORCE }
 
+    /** Whether reverting an automatic correction keeps the typed word from then on. */
+    private enum Keep { NEVER, IF_TYPING_GOES_ON, NOW }
+
     /** What a finished word becomes: a correction, slang (of the corrected word), or both. */
     private static final class Replacement {
         final String text;
@@ -88,6 +91,11 @@ public final class InputLogic {
     private boolean undoIsSlang;
     /** The replacement was an automatic correction only: undoing it keeps the typed word. */
     private boolean undoKeepsWord;
+    /**
+     * A word whose automatic correction Delete just undid. It is kept once the user types on;
+     * another Delete (a held or repeated Delete erasing text) or moving away drops it.
+     */
+    private String keepPending;
 
     public InputLogic(Editor editor, Listener listener) {
         this.editor = editor;
@@ -98,6 +106,7 @@ public final class InputLogic {
 
     public void startInput(FieldConfig config) {
         this.config = config;
+        keepPending = null;
         if (word.length() > 0) {
             // A reset while composing must not leave a region that the next keystroke replaces.
             editor.finishComposingText();
@@ -118,6 +127,7 @@ public final class InputLogic {
 
     /** Leaves the composing word in the editor as typed (styled, without slang). */
     public void finishInput() {
+        keepPending = null;
         if (word.length() > 0) {
             editor.finishComposingText();
         }
@@ -246,6 +256,7 @@ public final class InputLogic {
     // ---------------------------------------------------------------- input events
 
     public void onCodePoint(int cp) {
+        confirmKeep();
         switch (config.mode) {
             case RAW:
                 if (Character.isBmpCodePoint(cp)) {
@@ -283,7 +294,7 @@ public final class InputLogic {
         if (isWordCodePoint(cp) && word.length() == 0 && undoAvailable()
                 && (".".equals(undoSeparator) || ":".equals(undoSeparator))) {
             // The token continues ("good.com", "best:"): take the replacement back.
-            revertReplacement(false);
+            revertReplacement(Keep.NEVER);
         }
         clearUndo();
         if (isWordCodePoint(cp)) {
@@ -300,6 +311,7 @@ public final class InputLogic {
      * way punctuation does (slang applies to that word).
      */
     public void onEmoji(String emoji) {
+        confirmKeep();
         switch (config.mode) {
             case RAW:
                 editor.commitText(emoji);
@@ -321,6 +333,7 @@ public final class InputLogic {
     }
 
     public void onEnter() {
+        confirmKeep();
         phantomSpaceAt = -1;
         if (config.enterIsAction) {
             if (config.mode == FieldConfig.Mode.STYLED && word.length() > 0) {
@@ -342,6 +355,7 @@ public final class InputLogic {
 
     public void onDelete() {
         phantomSpaceAt = -1;
+        keepPending = null;
         if (config.mode == FieldConfig.Mode.RAW) {
             editor.sendDeleteKey();
             selStart = selEnd = -1;
@@ -361,7 +375,7 @@ public final class InputLogic {
             notifyChanged();
             return;
         }
-        if (undoSlang()) return;
+        if (revertReplacement(Keep.IF_TYPING_GOES_ON)) return;
         clearUndo();
         deleteBeforeCursor();
         notifyChanged();
@@ -390,6 +404,7 @@ public final class InputLogic {
     public int moveCursor(int steps) {
         if (steps == 0) return 0;
         phantomSpaceAt = -1;
+        keepPending = null;
         clearUndo();
         if (word.length() > 0) {
             editor.finishComposingText();
@@ -434,6 +449,7 @@ public final class InputLogic {
     public void deleteWords(int words) {
         if (words <= 0 || config.mode == FieldConfig.Mode.RAW) return;
         phantomSpaceAt = -1;
+        keepPending = null;
         clearUndo();
         int remaining = words;
         if (config.mode == FieldConfig.Mode.STYLED && word.length() > 0) {
@@ -535,18 +551,15 @@ public final class InputLogic {
     }
 
     /**
-     * Reverts the last substitution at the user's request (Delete, or UNDO in the strip).
-     * Returns false if none is revertible.
+     * Reverts the last substitution from UNDO in the strip; an undone automatic correction
+     * keeps that word from then on. Returns false if none is revertible.
      */
     public boolean undoSlang() {
-        return revertReplacement(true);
+        return revertReplacement(Keep.NOW);
     }
 
-    /**
-     * Restores the typed word in place of the last substitution. {@code byUser}: the user asked
-     * for it, so an undone automatic correction keeps that word from then on.
-     */
-    private boolean revertReplacement(boolean byUser) {
+    /** Restores the typed word in place of the last substitution. */
+    private boolean revertReplacement(Keep keep) {
         if (!undoAvailable()) return false;
         CharSequence before = editor.getTextBeforeCursor(undoCommitted.length());
         if (before == null || !undoCommitted.contentEquals(before)) {
@@ -561,11 +574,22 @@ public final class InputLogic {
             selStart = selEnd = selStart - undoCommitted.length() + undoRevert.length();
         }
         phantomSpaceAt = -1;
-        String kept = byUser && undoKeepsWord ? undoOriginalWord : null;
+        String kept = undoKeepsWord && keep != Keep.NEVER ? undoOriginalWord : null;
         clearUndo();
-        if (kept != null && listener != null) listener.onWordKept(kept);
+        if (keep == Keep.IF_TYPING_GOES_ON) {
+            keepPending = kept;
+        } else if (kept != null && listener != null) {
+            listener.onWordKept(kept);
+        }
         notifyChanged();
         return true;
+    }
+
+    /** The user typed on after Delete undid a correction: keep that word. */
+    private void confirmKeep() {
+        String kept = keepPending;
+        keepPending = null;
+        if (kept != null && listener != null) listener.onWordKept(kept);
     }
 
     /** Called from {@code InputMethodService.onUpdateSelection}. */
@@ -609,6 +633,7 @@ public final class InputLogic {
         selStart = ns;
         selEnd = ne;
         phantomSpaceAt = -1;
+        keepPending = null;
         clearUndo();
         if (word.length() > 0) {
             word.setLength(0);

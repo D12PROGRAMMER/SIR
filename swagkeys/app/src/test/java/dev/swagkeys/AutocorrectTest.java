@@ -110,11 +110,24 @@ public class AutocorrectTest {
     @Test
     public void keepsTheTypedCasePattern() {
         assertEquals("The", fix("Teh"));
-        assertEquals("THE", fix("TEH"));
         assertEquals("Hello", fix("Hwllo"));
-        // Mixed case is someone's spelling on purpose.
+        // Mixed case is someone's spelling on purpose; ALL CAPS words are mostly acronyms.
         assertNull(fix("tEh"));
         assertNull(fix("iPhonee"));
+        for (String w : new String[] {"TEH", "HWLLO", "EST", "OTP", "OCD", "GIFS"}) {
+            assertNull(w, fix(w));
+        }
+    }
+
+    @Test
+    public void leavesChatSpellingsNamesAndBritishSpellingAlone() {
+        for (String w : new String[] {"hehe", "imma", "shoulda", "coulda", "woulda", "gurl",
+                "bday", "thanx", "chem", "convo", "faves", "favs", "smol", "boi", "heyo", "welp",
+                "dawg", "watcha", "crypto", "uber", "venmo", "vape", "manga", "dming", "dmed",
+                "esports", "gifs", "hella", "yea", "nah", "wat", "colour", "grey", "centre",
+                "cancelled", "favourite", "kent"}) {
+            assertNull(w, fix(w));
+        }
     }
 
     @Test
@@ -245,9 +258,60 @@ public class AutocorrectTest {
         assertFalse(logic.undoIsSlang());
         type("<");
         assertEquals("teh ", editor.value());
-        assertEquals(Collections.singletonList("teh"), keptEvents);
+        // Kept once typing goes on, before the next word is finished.
+        assertTrue(keptEvents.isEmpty());
         type("teh ");
+        assertEquals(Collections.singletonList("teh"), keptEvents);
         assertEquals("teh teh ", editor.value());
+    }
+
+    @Test
+    public void heldDeleteErasesWithoutKeepingTheTypo() {
+        start(true, false, TextStyle.NORMAL);
+        type("a adn ");
+        assertEquals("a and ", editor.value());
+        // A held Delete: the first event restores the typed word, the rest erase it.
+        type("<<<<<");
+        assertEquals("a ", editor.value());
+        assertTrue(keptEvents.isEmpty());
+        type("adn ");
+        assertEquals("a and ", editor.value());
+    }
+
+    @Test
+    public void deletingAnEmojiAfterACorrectionDoesNotKeepTheTypo() {
+        start(true, false, TextStyle.NORMAL);
+        type("hapy");
+        logic.onEmoji("\uD83D\uDE00");
+        editor.deliverUpdates();
+        assertEquals("happy\uD83D\uDE00", editor.value());
+        type("<");
+        assertEquals("hapy\uD83D\uDE00", editor.value());
+        type("<");
+        assertEquals("hapy", editor.value());
+        assertTrue(keptEvents.isEmpty());
+    }
+
+    @Test
+    public void undoTapKeepsTheWordAtOnce() {
+        start(true, false, TextStyle.NORMAL);
+        type("teh ");
+        assertTrue(logic.undoSlang());
+        editor.deliverUpdates();
+        assertEquals("teh ", editor.value());
+        assertEquals(Collections.singletonList("teh"), keptEvents);
+    }
+
+    @Test
+    public void movingAwayAfterDeleteUndoDoesNotKeepTheWord() {
+        start(true, false, TextStyle.NORMAL);
+        type("teh ");
+        type("<");
+        assertEquals("teh ", editor.value());
+        editor.userMoveCursor(0);
+        editor.deliverUpdates();
+        type("x");
+        assertTrue(keptEvents.isEmpty());
     }
 
     @Test
