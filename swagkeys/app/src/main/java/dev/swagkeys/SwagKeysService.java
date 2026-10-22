@@ -1,0 +1,329 @@
+package dev.swagkeys;
+
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.graphics.Typeface;
+import android.inputmethodservice.InputMethodService;
+import android.os.Build;
+import android.os.IBinder;
+import android.view.KeyEvent;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowInsetsController;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
+
+/** The input method. Bridges {@link KeyboardView} events to {@link InputLogic}. */
+public final class SwagKeysService extends InputMethodService
+        implements KeyboardView.Listener, InputLogic.Listener {
+
+    private Prefs prefs;
+    private InputLogic logic;
+    private KeyboardView keyboard;
+    private boolean fontsDirty = true;
+
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
+            (sp, key) -> onPreferenceChanged(key);
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        prefs = new Prefs(this);
+        logic = new InputLogic(new ConnectionEditor(), this);
+        logic.setStyle(prefs.style());
+        logic.setSlangEnabled(prefs.slang());
+        prefs.raw().registerOnSharedPreferenceChangeListener(prefListener);
+    }
+
+    @Override
+    public void onDestroy() {
+        prefs.raw().unregisterOnSharedPreferenceChangeListener(prefListener);
+        super.onDestroy();
+    }
+
+    @Override
+    public View onCreateInputView() {
+        keyboard = new KeyboardView(this);
+        keyboard.setListener(this);
+        fontsDirty = true;
+        applyAppearance();
+        return keyboard;
+    }
+
+    @Override
+    public boolean onEvaluateFullscreenMode() {
+        // Keep the app's own field visible so styled composing text is shown in place.
+        return false;
+    }
+
+    @Override
+    public void onStartInput(EditorInfo attribute, boolean restarting) {
+        super.onStartInput(attribute, restarting);
+        logic.startInput(FieldConfig.from(attribute));
+    }
+
+    @Override
+    public void onStartInputView(EditorInfo info, boolean restarting) {
+        super.onStartInputView(info, restarting);
+        if (keyboard == null) return;
+        applyAppearance();
+        FieldConfig config = logic.config();
+        keyboard.setField(config.layout, config.enterAction, offerGlobeKey());
+        onInputStateChanged();
+    }
+
+    @Override
+    public void onFinishInputView(boolean finishingInput) {
+        logic.finishInput();
+        if (keyboard != null) keyboard.reset();
+        super.onFinishInputView(finishingInput);
+    }
+
+    @Override
+    public void onFinishInput() {
+        logic.finishInput();
+        super.onFinishInput();
+    }
+
+    @Override
+    public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd,
+            int candidatesStart, int candidatesEnd) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd,
+                candidatesStart, candidatesEnd);
+        logic.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd,
+                candidatesStart, candidatesEnd);
+    }
+
+    @Override
+    public void onWindowShown() {
+        super.onWindowShown();
+        applySystemBarColors();
+    }
+
+    // ---------------------------------------------------------------- appearance
+
+    private void applyAppearance() {
+        if (keyboard == null) return;
+        keyboard.setPalette(Palette.resolve(this, prefs.theme()));
+        keyboard.setFeedback(prefs.haptics(), prefs.sound());
+        if (fontsDirty) {
+            Typeface[] faces = Fonts.resolve(this, prefs);
+            keyboard.setFonts(faces[0], faces[1]);
+            fontsDirty = false;
+        }
+        applySystemBarColors();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applySystemBarColors() {
+        Window window = getWindow() == null ? null : getWindow().getWindow();
+        if (window == null || keyboard == null) return;
+        Palette p = keyboard.palette();
+        // Ignored on Android 15+ for edge-to-edge windows; KeyboardView then pads for the
+        // navigation bar inset and draws its own background behind it.
+        window.setNavigationBarColor(p.background);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController c = window.getInsetsController();
+            if (c != null) {
+                c.setSystemBarsAppearance(p.dark ? 0 : WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                        WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+            }
+        } else {
+            View decor = window.getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            flags = p.dark ? flags & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                    : flags | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decor.setSystemUiVisibility(flags);
+        }
+    }
+
+    private void onPreferenceChanged(String key) {
+        if (key == null) return;
+        switch (key) {
+            case Prefs.KEY_STYLE:
+                logic.setStyle(prefs.style());
+                break;
+            case Prefs.KEY_SLANG:
+                logic.setSlangEnabled(prefs.slang());
+                break;
+            case Prefs.KEY_FONT:
+            case Prefs.KEY_FONT_VERSION:
+                fontsDirty = true;
+                applyAppearance();
+                break;
+            case Prefs.KEY_THEME:
+            case Prefs.KEY_HAPTICS:
+            case Prefs.KEY_SOUND:
+                applyAppearance();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private IBinder windowToken() {
+        Window window = getWindow() == null ? null : getWindow().getWindow();
+        return window == null ? null : window.getAttributes().token;
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean offerGlobeKey() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return shouldOfferSwitchingToNextInputMethod();
+        }
+        IBinder token = windowToken();
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        return token != null && imm != null && imm.shouldOfferSwitchingToNextInputMethod(token);
+    }
+
+    // ---------------------------------------------------------------- InputLogic.Listener
+
+    @Override
+    public void onInputStateChanged() {
+        if (keyboard == null) return;
+        keyboard.setStripState(logic.style(), logic.stylesActive(), logic.isSlangEnabled(),
+                logic.slangActive(), logic.pendingSlang(), logic.undoableWord());
+        keyboard.setAutoCaps(logic.shouldAutoCapitalize());
+    }
+
+    // ---------------------------------------------------------------- KeyboardView.Listener
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onKey(int code) {
+        switch (code) {
+            case Key.CODE_DELETE:
+                logic.onDelete();
+                break;
+            case Key.CODE_ENTER:
+                logic.onEnter();
+                break;
+            case Key.CODE_GLOBE:
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    switchToNextInputMethod(false);
+                } else {
+                    IBinder token = windowToken();
+                    InputMethodManager imm =
+                            (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (token != null && imm != null) imm.switchToNextInputMethod(token, false);
+                }
+                break;
+            default:
+                if (code > 0) logic.onCodePoint(code);
+                break;
+        }
+    }
+
+    @Override
+    public void onSpaceLongPress() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showInputMethodPicker();
+    }
+
+    @Override
+    public void onStyleSelected(TextStyle style) {
+        logic.setStyle(style);
+        prefs.setStyle(style);
+    }
+
+    @Override
+    public void onSlangToggle() {
+        boolean on = !logic.isSlangEnabled();
+        logic.setSlangEnabled(on);
+        prefs.setSlang(on);
+    }
+
+    @Override
+    public void onSuggestionTap() {
+        if (logic.undoableWord() != null) {
+            logic.undoSlang();
+        } else {
+            logic.pickSlang();
+        }
+    }
+
+    @Override
+    public void onOpenSettings() {
+        Intent intent = new Intent(this, SettingsActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        requestHideSelf(0);
+        startActivity(intent);
+    }
+
+    // ---------------------------------------------------------------- editor bridge
+
+    /** {@link Editor} over the current InputConnection; every call tolerates a null connection. */
+    private final class ConnectionEditor implements Editor {
+        @Override
+        public CharSequence getTextBeforeCursor(int n) {
+            InputConnection ic = getCurrentInputConnection();
+            return ic == null ? null : ic.getTextBeforeCursor(n, 0);
+        }
+
+        @Override
+        public CharSequence getSelectedText() {
+            InputConnection ic = getCurrentInputConnection();
+            return ic == null ? null : ic.getSelectedText(0);
+        }
+
+        @Override
+        public void setComposingText(CharSequence text) {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.setComposingText(text, 1);
+        }
+
+        @Override
+        public void commitText(CharSequence text) {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.commitText(text, 1);
+        }
+
+        @Override
+        public void finishComposingText() {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.finishComposingText();
+        }
+
+        @Override
+        public void deleteSurroundingText(int beforeLength, int afterLength) {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.deleteSurroundingText(beforeLength, afterLength);
+        }
+
+        @Override
+        public void sendDeleteKey() {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL);
+        }
+
+        @Override
+        public void sendKeyChar(char c) {
+            SwagKeysService.this.sendKeyChar(c);
+        }
+
+        @Override
+        public int getCursorCapsMode(int reqModes) {
+            InputConnection ic = getCurrentInputConnection();
+            return ic == null ? 0 : ic.getCursorCapsMode(reqModes);
+        }
+
+        @Override
+        public void performEditorAction(int actionId) {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.performEditorAction(actionId);
+        }
+
+        @Override
+        public void beginBatchEdit() {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.beginBatchEdit();
+        }
+
+        @Override
+        public void endBatchEdit() {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null) ic.endBatchEdit();
+        }
+    }
+}

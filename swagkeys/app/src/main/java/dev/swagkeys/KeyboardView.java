@@ -1,0 +1,1041 @@
+package dev.swagkeys;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.Typeface;
+import android.media.AudioManager;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.text.TextPaint;
+import android.text.TextUtils;
+import android.util.SparseArray;
+import android.view.HapticFeedbackConstants;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.inputmethod.EditorInfo;
+
+import java.util.List;
+
+/**
+ * Canvas-drawn keyboard: a suggestion/style strip above four key rows, or the style picker in
+ * place of the rows. All drawing uses the dot-matrix typeface and {@link DotIcon} glyphs.
+ */
+public final class KeyboardView extends View {
+
+    public interface Listener {
+        /** A code point, or {@link Key#CODE_DELETE}, {@link Key#CODE_ENTER}, {@link Key#CODE_GLOBE}. */
+        void onKey(int code);
+
+        void onSpaceLongPress();
+
+        void onStyleSelected(TextStyle style);
+
+        void onSlangToggle();
+
+        void onSuggestionTap();
+
+        void onOpenSettings();
+    }
+
+    public enum Shift { OFF, ON, LOCKED }
+
+    private static final long LONG_PRESS_MS = 350;
+    private static final long LONG_PRESS_FUNCTION_MS = 500;
+    private static final long REPEAT_START_MS = 400;
+    private static final long REPEAT_INTERVAL_MS = 50;
+    private static final long DOUBLE_TAP_MS = 350;
+
+    private static final int REGION_NONE = 0;
+    private static final int REGION_KEY = 1;
+    private static final int REGION_CHIP = 2;
+    private static final int REGION_SUGGESTION = 3;
+    private static final int REGION_SWAG = 4;
+    private static final int REGION_GEAR = 5;
+    private static final int REGION_TILE = 6;
+
+    private static final String PANEL_SAMPLE = "swag";
+
+    private final class Pointer {
+        final int id;
+        int region;
+        Key key;
+        int tile = -1;
+        boolean consumed;
+        /** Long-press code point shown in the preview after a long press fired, else 0. */
+        int longPressShown;
+        Runnable longPress;
+
+        Pointer(int id) {
+            this.id = id;
+        }
+    }
+
+    private Listener listener;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final AudioManager audio;
+
+    private Palette palette = Palette.DARK;
+    private Typeface keyFont = Typeface.MONOSPACE;
+    private Typeface uiFont = Typeface.MONOSPACE;
+    private boolean haptics = true;
+    private boolean sound = false;
+
+    // Strip state
+    private TextStyle style = TextStyle.NORMAL;
+    private boolean stylesActive = true;
+    private boolean slangOn = true;
+    private boolean slangActive = true;
+    private String pendingSlang;
+    private String undoWord;
+    private boolean stylePanelOpen;
+
+    // Layout state
+    private KeyboardLayouts.Mode mode = KeyboardLayouts.Mode.LETTERS;
+    private FieldConfig.Layout fieldLayout = FieldConfig.Layout.TEXT;
+    private boolean showGlobe;
+    private int enterAction = EditorInfo.IME_ACTION_NONE;
+    private List<KeyboardLayouts.Row> rows;
+    private boolean typedInSymbols;
+
+    // Shift state
+    private Shift shift = Shift.OFF;
+    private boolean shiftAuto;
+    private boolean autoCapsWanted;
+    private long lastShiftTapTime;
+    private int shiftPointerId = -1;
+    private boolean shiftChordTyped;
+
+    // Geometry (px)
+    private final float density;
+    private float stripHeight;
+    private float rowHeight;
+    private float padTop;
+    private float padBottom;
+    private float padH;
+    private float keyInsetH;
+    private float keyInsetV;
+    private float radius;
+    private int insetBottom;
+    private float keysTop;
+    private final RectF chipRect = new RectF();
+    private final RectF suggestionRect = new RectF();
+    private final RectF swagRect = new RectF();
+    private final RectF gearRect = new RectF();
+    private final RectF[] tileRects = new RectF[TextStyle.values().length];
+
+    // Touch
+    private final SparseArray<Pointer> pointers = new SparseArray<>();
+    private int stripPointerId = -1;
+    private Runnable repeatRunnable;
+
+    // Paint
+    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint text = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dotGridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF tmp = new RectF();
+
+    public KeyboardView(Context context) {
+        super(context);
+        density = context.getResources().getDisplayMetrics().density;
+        audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        stroke.setStyle(Paint.Style.STROKE);
+        stroke.setStrokeWidth(1.5f * density);
+        text.setTextAlign(Paint.Align.CENTER);
+        for (int i = 0; i < tileRects.length; i++) tileRects[i] = new RectF();
+        setContentDescription(context.getString(R.string.ime_name));
+        setHapticFeedbackEnabled(true);
+        updateDimensions();
+        rebuildLayout();
+        rebuildDotGrid();
+        setOnApplyWindowInsetsListener((v, insets) -> {
+            int bottom;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+            } else {
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            if (bottom != insetBottom) {
+                insetBottom = bottom;
+                requestLayout();
+            }
+            return insets;
+        });
+    }
+
+    // ---------------------------------------------------------------- configuration
+
+    public void setListener(Listener listener) {
+        this.listener = listener;
+    }
+
+    public void setPalette(Palette palette) {
+        if (this.palette == palette) return;
+        this.palette = palette;
+        rebuildDotGrid();
+        invalidate();
+    }
+
+    public Palette palette() {
+        return palette;
+    }
+
+    public void setFonts(Typeface keyFont, Typeface uiFont) {
+        this.keyFont = keyFont;
+        this.uiFont = uiFont;
+        computeGeometry();
+        invalidate();
+    }
+
+    public void setFeedback(boolean haptics, boolean sound) {
+        this.haptics = haptics;
+        this.sound = sound;
+    }
+
+    /** Configures the layout for a newly focused field. */
+    public void setField(FieldConfig.Layout layout, int enterAction, boolean showGlobe) {
+        cancelAllPointers();
+        this.fieldLayout = layout;
+        this.enterAction = enterAction;
+        this.showGlobe = showGlobe;
+        this.mode = layout == FieldConfig.Layout.TEXT
+                ? KeyboardLayouts.Mode.LETTERS : KeyboardLayouts.Mode.NUMPAD;
+        this.stylePanelOpen = false;
+        this.typedInSymbols = false;
+        shift = Shift.OFF;
+        shiftAuto = false;
+        rebuildLayout();
+        applyAutoCaps();
+        invalidate();
+    }
+
+    public void setStripState(TextStyle style, boolean stylesActive, boolean slangOn,
+            boolean slangActive, String pendingSlang, String undoWord) {
+        this.style = style;
+        this.stylesActive = stylesActive;
+        this.slangOn = slangOn;
+        this.slangActive = slangActive;
+        this.pendingSlang = pendingSlang;
+        this.undoWord = undoWord;
+        invalidate();
+    }
+
+    /** Requests (or withdraws) automatic capitalization of the next letter. */
+    public void setAutoCaps(boolean caps) {
+        autoCapsWanted = caps;
+        applyAutoCaps();
+    }
+
+    public Shift shift() {
+        return shift;
+    }
+
+    public KeyboardLayouts.Mode mode() {
+        return mode;
+    }
+
+    public boolean isStylePanelOpen() {
+        return stylePanelOpen;
+    }
+
+    /** Closes transient UI (style panel, presses); called when the keyboard is hidden. */
+    public void reset() {
+        cancelAllPointers();
+        stylePanelOpen = false;
+        invalidate();
+    }
+
+    List<KeyboardLayouts.Row> rows() {
+        return rows;
+    }
+
+    // ---------------------------------------------------------------- layout
+
+    private void updateDimensions() {
+        boolean landscape = getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_LANDSCAPE;
+        stripHeight = 44 * density;
+        rowHeight = (landscape ? 40 : 54) * density;
+        padTop = 2 * density;
+        padBottom = 6 * density;
+        padH = 3 * density;
+        keyInsetH = 2.5f * density;
+        keyInsetV = 3.5f * density;
+        radius = 10 * density;
+    }
+
+    @Override
+    protected void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        updateDimensions();
+        requestLayout();
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int width = MeasureSpec.getSize(widthMeasureSpec);
+        int rowsCount = rows == null ? 4 : rows.size();
+        int height = Math.round(padTop + stripHeight + rowsCount * rowHeight + padBottom) + insetBottom;
+        setMeasuredDimension(width, height);
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        computeGeometry();
+    }
+
+    private void rebuildLayout() {
+        rows = KeyboardLayouts.build(mode, fieldLayout, showGlobe, enterKeyFor(enterAction));
+        computeGeometry();
+    }
+
+    static Key enterKeyFor(int action) {
+        switch (action) {
+            case EditorInfo.IME_ACTION_GO:
+                return Key.fn(Key.CODE_ENTER, "GO", null, 1.5f, Key.Type.ENTER);
+            case EditorInfo.IME_ACTION_SEARCH:
+                return Key.fn(Key.CODE_ENTER, null, DotIcon.SEARCH, 1.5f, Key.Type.ENTER);
+            case EditorInfo.IME_ACTION_SEND:
+                return Key.fn(Key.CODE_ENTER, "SEND", null, 1.5f, Key.Type.ENTER);
+            case EditorInfo.IME_ACTION_NEXT:
+                return Key.fn(Key.CODE_ENTER, "NEXT", null, 1.5f, Key.Type.ENTER);
+            case EditorInfo.IME_ACTION_DONE:
+                return Key.fn(Key.CODE_ENTER, "DONE", null, 1.5f, Key.Type.ENTER);
+            case EditorInfo.IME_ACTION_PREVIOUS:
+                return Key.fn(Key.CODE_ENTER, "PREV", null, 1.5f, Key.Type.ENTER);
+            default:
+                return Key.fn(Key.CODE_ENTER, null, DotIcon.ENTER, 1.5f, Key.Type.ENTER);
+        }
+    }
+
+    private void computeGeometry() {
+        int width = getWidth();
+        if (width == 0 || rows == null) return;
+        keysTop = padTop + stripHeight;
+        float unit = (width - 2 * padH) / KeyboardLayouts.ROW_UNITS;
+        for (int r = 0; r < rows.size(); r++) {
+            KeyboardLayouts.Row row = rows.get(r);
+            float x = padH + row.offset * unit;
+            float top = keysTop + r * rowHeight;
+            for (Key k : row.keys) {
+                float w = k.weight * unit;
+                k.bounds.set(x, top, x + w, top + rowHeight);
+                x += w;
+            }
+        }
+        // Strip regions
+        float stripMid = padTop + stripHeight / 2f;
+        float pillH = stripHeight - 14 * density;
+        gearRect.set(width - padH - stripHeight, padTop, width - padH, padTop + stripHeight);
+        text.setTypeface(uiFont);
+        text.setTextSize(pillH * 0.52f);
+        float swagW = text.measureText("SWAG") + 22 * density;
+        swagRect.set(gearRect.left - swagW - 4 * density, stripMid - pillH / 2f,
+                gearRect.left - 4 * density, stripMid + pillH / 2f);
+        float chipW = Math.min(width * 0.34f,
+                text.measureText(longestStyleLabel()) + 34 * density);
+        chipRect.set(padH + 6 * density, stripMid - pillH / 2f,
+                padH + 6 * density + chipW, stripMid + pillH / 2f);
+        suggestionRect.set(chipRect.right + 8 * density, padTop,
+                swagRect.left - 8 * density, padTop + stripHeight);
+        // Style panel tiles: 3 columns, filling the key area.
+        int cols = 3;
+        int count = tileRects.length;
+        int tileRows = (count + cols - 1) / cols;
+        float areaH = (rows.size() * rowHeight);
+        float tileW = (width - 2 * padH) / cols;
+        float tileH = areaH / tileRows;
+        for (int i = 0; i < count; i++) {
+            int c = i % cols;
+            int r = i / cols;
+            tileRects[i].set(padH + c * tileW, keysTop + r * tileH,
+                    padH + (c + 1) * tileW, keysTop + (r + 1) * tileH);
+        }
+    }
+
+    private static String longestStyleLabel() {
+        String best = "";
+        for (TextStyle s : TextStyle.values()) if (s.label.length() > best.length()) best = s.label;
+        return best;
+    }
+
+    private void rebuildDotGrid() {
+        int cell = Math.max(4, Math.round(12 * density));
+        Bitmap tile = Bitmap.createBitmap(cell, cell, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(tile);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(palette.dotGrid);
+        c.drawCircle(cell / 2f, cell / 2f, 0.9f * density, p);
+        dotGridPaint.setShader(new BitmapShader(tile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT));
+    }
+
+    // ---------------------------------------------------------------- drawing
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        canvas.drawColor(palette.background);
+        canvas.drawRect(0, 0, getWidth(), getHeight(), dotGridPaint);
+        drawStrip(canvas);
+        if (stylePanelOpen) {
+            drawStylePanel(canvas);
+        } else {
+            for (KeyboardLayouts.Row row : rows) {
+                for (Key k : row.keys) drawKey(canvas, k, isPressed(k));
+            }
+            drawPreviews(canvas);
+        }
+    }
+
+    private void drawStrip(Canvas canvas) {
+        float pillRadius = chipRect.height() / 2f;
+        boolean chipPressed = isRegionPressed(REGION_CHIP);
+
+        // Style chip
+        fill.setColor(chipPressed || stylePanelOpen ? palette.keyPressed : palette.key);
+        canvas.drawRoundRect(chipRect, pillRadius, pillRadius, fill);
+        stroke.setColor(palette.outline);
+        canvas.drawRoundRect(chipRect, pillRadius, pillRadius, stroke);
+        fill.setColor(stylesActive && style != TextStyle.NORMAL ? palette.accent : palette.textSecondary);
+        float dotR = 3 * density;
+        float dotX = chipRect.left + 12 * density;
+        canvas.drawCircle(dotX, chipRect.centerY(), dotR, fill);
+        text.setTypeface(uiFont);
+        text.setTextSize(chipRect.height() * 0.52f);
+        text.setColor(stylesActive ? palette.text : palette.textSecondary);
+        text.setTextAlign(Paint.Align.LEFT);
+        String chipLabel = stylesActive ? style.label : "PLAIN";
+        float labelLeft = dotX + 8 * density;
+        CharSequence fitted = TextUtils.ellipsize(chipLabel, text,
+                chipRect.right - 8 * density - labelLeft, TextUtils.TruncateAt.END);
+        canvas.drawText(fitted, 0, fitted.length(), labelLeft, baseline(chipRect.centerY()), text);
+
+        // Suggestion / undo
+        String suggestion = null;
+        int suggestionColor = palette.text;
+        if (undoWord != null) {
+            suggestion = "UNDO: " + undoWord;
+            suggestionColor = palette.textSecondary;
+        } else if (pendingSlang != null) {
+            suggestion = "→ " + (stylesActive ? style.apply(pendingSlang) : pendingSlang);
+            suggestionColor = palette.accent;
+        }
+        if (suggestion != null) {
+            if (isRegionPressed(REGION_SUGGESTION)) {
+                fill.setColor(palette.keyPressed);
+                tmp.set(suggestionRect.left, chipRect.top, suggestionRect.right, chipRect.bottom);
+                canvas.drawRoundRect(tmp, pillRadius, pillRadius, fill);
+            }
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setTextSize(stripHeight * 0.36f);
+            text.setColor(suggestionColor);
+            CharSequence s = TextUtils.ellipsize(suggestion, text,
+                    suggestionRect.width() - 8 * density, TextUtils.TruncateAt.END);
+            canvas.drawText(s, 0, s.length(), suggestionRect.centerX(),
+                    baseline(suggestionRect.centerY()), text);
+        }
+
+        // SWAG toggle
+        boolean swagPressed = isRegionPressed(REGION_SWAG);
+        if (slangOn && slangActive) {
+            fill.setColor(swagPressed ? palette.keyPressed : palette.accent);
+            canvas.drawRoundRect(swagRect, pillRadius, pillRadius, fill);
+            text.setColor(palette.onAccent);
+        } else {
+            fill.setColor(swagPressed ? palette.keyPressed : palette.key);
+            canvas.drawRoundRect(swagRect, pillRadius, pillRadius, fill);
+            stroke.setColor(palette.outline);
+            canvas.drawRoundRect(swagRect, pillRadius, pillRadius, stroke);
+            text.setColor(palette.textSecondary);
+        }
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTextSize(swagRect.height() * 0.52f);
+        canvas.drawText("SWAG", swagRect.centerX(), baseline(swagRect.centerY()), text);
+        if (slangOn && !slangActive) {
+            // Enabled but not applicable to this field: strike through.
+            fill.setColor(palette.textSecondary);
+            canvas.drawRect(swagRect.left + 8 * density, swagRect.centerY() - 0.75f * density,
+                    swagRect.right - 8 * density, swagRect.centerY() + 0.75f * density, fill);
+        }
+
+        // Settings
+        fill.setColor(isRegionPressed(REGION_GEAR) ? palette.text : palette.textSecondary);
+        DotIcon.GEAR.draw(canvas, gearRect.centerX(), gearRect.centerY(), stripHeight * 0.42f, fill);
+    }
+
+    private void drawKey(Canvas canvas, Key k, boolean pressed) {
+        tmp.set(k.bounds.left + keyInsetH, k.bounds.top + keyInsetV,
+                k.bounds.right - keyInsetH, k.bounds.bottom - keyInsetV);
+        int bg;
+        int fg = palette.text;
+        switch (k.type) {
+            case ENTER:
+                bg = pressed ? palette.keyPressed : palette.accent;
+                fg = palette.onAccent;
+                break;
+            case SHIFT:
+                if (shift == Shift.LOCKED) {
+                    bg = pressed ? palette.keyPressed : palette.accent;
+                    fg = palette.onAccent;
+                } else {
+                    bg = pressed ? palette.keyPressed : palette.keyFunction;
+                }
+                break;
+            case FUNCTION:
+            case DELETE:
+                bg = pressed ? palette.keyPressed : palette.keyFunction;
+                break;
+            default:
+                bg = pressed ? palette.keyPressed : palette.key;
+        }
+        fill.setColor(bg);
+        canvas.drawRoundRect(tmp, radius, radius, fill);
+
+        float cx = tmp.centerX();
+        float cy = tmp.centerY();
+        DotIcon icon = k.icon;
+        if (k.type == Key.Type.SHIFT) {
+            icon = shift == Shift.OFF ? DotIcon.SHIFT
+                    : shift == Shift.ON ? DotIcon.SHIFT_ON : DotIcon.SHIFT_LOCK;
+        }
+        if (icon != null) {
+            fill.setColor(fg);
+            icon.draw(canvas, cx, cy, Math.min(tmp.height(), tmp.width()) * 0.46f, fill);
+            return;
+        }
+        text.setTextAlign(Paint.Align.CENTER);
+        if (k.type == Key.Type.SPACE) {
+            String label = stylesActive && style != TextStyle.NORMAL ? style.label : "SWAGKEYS";
+            text.setTypeface(uiFont);
+            text.setColor(palette.textSecondary);
+            fitTextSize(label, tmp.width() - 16 * density, rowHeight * 0.26f);
+            canvas.drawText(label, cx, baseline(cy), text);
+            return;
+        }
+        if (k.type == Key.Type.CHAR) {
+            String label = k.label;
+            if (k.isLetter() && shift != Shift.OFF) label = label.toUpperCase(java.util.Locale.ROOT);
+            text.setTypeface(keyFont);
+            text.setColor(fg);
+            fitTextSize(label, tmp.width() - 6 * density, rowHeight * 0.44f);
+            canvas.drawText(label, cx, baseline(cy), text);
+            if (k.longPressCode != 0) {
+                text.setTypeface(uiFont);
+                text.setColor(palette.textSecondary);
+                text.setTextSize(rowHeight * 0.2f);
+                canvas.drawText(new String(Character.toChars(k.longPressCode)),
+                        tmp.right - 7 * density, tmp.top + rowHeight * 0.22f, text);
+            }
+            return;
+        }
+        // Text-labelled function / enter key
+        text.setTypeface(uiFont);
+        text.setColor(fg);
+        fitTextSize(k.label, tmp.width() - 10 * density, rowHeight * 0.3f);
+        canvas.drawText(k.label, cx, baseline(cy), text);
+    }
+
+    private void drawPreviews(Canvas canvas) {
+        for (int i = 0; i < pointers.size(); i++) {
+            Pointer p = pointers.valueAt(i);
+            if (p.region != REGION_KEY || p.key == null || p.key.type != Key.Type.CHAR) continue;
+            if (p.consumed && p.longPressShown == 0) continue;
+            int cp = p.longPressShown != 0 ? p.longPressShown : displayCode(p.key);
+            String glyph = new String(Character.toChars(cp));
+            if (stylesActive) glyph = style.apply(glyph);
+            Key k = p.key;
+            float w = Math.max(k.bounds.width() * 1.25f, rowHeight * 0.95f);
+            float h = rowHeight * 1.3f;
+            float left = Math.max(0, Math.min(getWidth() - w, k.bounds.centerX() - w / 2f));
+            float top = Math.max(0, k.bounds.top - h + keyInsetV + 6 * density);
+            tmp.set(left, top, left + w, top + h - 6 * density);
+            fill.setColor(palette.keyPressed);
+            canvas.drawRoundRect(tmp, radius, radius, fill);
+            stroke.setColor(palette.accent);
+            canvas.drawRoundRect(tmp, radius, radius, stroke);
+            text.setTypeface(keyFont);
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setColor(palette.text);
+            fitTextSize(glyph, tmp.width() - 8 * density, rowHeight * 0.62f);
+            canvas.drawText(glyph, tmp.centerX(), baseline(tmp.centerY()), text);
+        }
+    }
+
+    private void drawStylePanel(Canvas canvas) {
+        TextStyle[] styles = TextStyle.values();
+        Pointer pressedTile = stripPointerId >= 0 ? pointers.get(stripPointerId) : null;
+        for (int i = 0; i < styles.length; i++) {
+            RectF r = tileRects[i];
+            tmp.set(r.left + keyInsetH, r.top + keyInsetV, r.right - keyInsetH, r.bottom - keyInsetV);
+            boolean pressed = pressedTile != null && pressedTile.region == REGION_TILE
+                    && pressedTile.tile == i;
+            fill.setColor(pressed ? palette.keyPressed : palette.key);
+            canvas.drawRoundRect(tmp, radius, radius, fill);
+            if (styles[i] == style) {
+                stroke.setColor(palette.accent);
+                canvas.drawRoundRect(tmp, radius, radius, stroke);
+            }
+            String sample = styles[i].apply(PANEL_SAMPLE);
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setTypeface(keyFont);
+            text.setColor(palette.text);
+            fitTextSize(sample, tmp.width() - 12 * density, tmp.height() * 0.38f);
+            canvas.drawText(sample, tmp.centerX(), baseline(tmp.top + tmp.height() * 0.42f), text);
+            text.setTypeface(uiFont);
+            text.setColor(styles[i] == style ? palette.accent : palette.textSecondary);
+            fitTextSize(styles[i].label, tmp.width() - 12 * density, tmp.height() * 0.2f);
+            canvas.drawText(styles[i].label, tmp.centerX(), baseline(tmp.top + tmp.height() * 0.78f), text);
+        }
+    }
+
+    private void fitTextSize(String s, float maxWidth, float preferred) {
+        text.setTextSize(preferred);
+        float w = text.measureText(s);
+        if (w > maxWidth && w > 0) text.setTextSize(Math.max(6 * density, preferred * maxWidth / w));
+    }
+
+    private float baseline(float centerY) {
+        Paint.FontMetrics fm = text.getFontMetrics();
+        return centerY - (fm.ascent + fm.descent) / 2f;
+    }
+
+    private boolean isPressed(Key k) {
+        for (int i = 0; i < pointers.size(); i++) {
+            Pointer p = pointers.valueAt(i);
+            if (p.region == REGION_KEY && p.key == k) return true;
+        }
+        return false;
+    }
+
+    private boolean isRegionPressed(int region) {
+        if (stripPointerId < 0) return false;
+        Pointer p = pointers.get(stripPointerId);
+        return p != null && p.region == region;
+    }
+
+    private int displayCode(Key k) {
+        return k.isLetter() && shift != Shift.OFF ? Character.toUpperCase(k.code) : k.code;
+    }
+
+    // ---------------------------------------------------------------- touch
+
+    // Keys are not clickable views; input is delivered through Listener, not performClick().
+    @SuppressLint("ClickableViewAccessibility")
+    @Override
+    public boolean onTouchEvent(MotionEvent ev) {
+        int action = ev.getActionMasked();
+        switch (action) {
+            case MotionEvent.ACTION_DOWN:
+            case MotionEvent.ACTION_POINTER_DOWN: {
+                int idx = ev.getActionIndex();
+                onPointerDown(ev.getPointerId(idx), ev.getX(idx), ev.getY(idx));
+                break;
+            }
+            case MotionEvent.ACTION_MOVE:
+                for (int i = 0; i < ev.getPointerCount(); i++) {
+                    onPointerMove(ev.getPointerId(i), ev.getX(i), ev.getY(i));
+                }
+                break;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_POINTER_UP: {
+                int idx = ev.getActionIndex();
+                onPointerUp(ev.getPointerId(idx), ev.getX(idx), ev.getY(idx));
+                break;
+            }
+            case MotionEvent.ACTION_CANCEL:
+                cancelAllPointers();
+                break;
+            default:
+                break;
+        }
+        invalidate();
+        return true;
+    }
+
+    private int stripRegionAt(float x, float y) {
+        if (y >= keysTop) return REGION_NONE;
+        if (x >= gearRect.left) return REGION_GEAR;
+        if (x >= swagRect.left - 4 * density) return REGION_SWAG;
+        if (x <= chipRect.right + 4 * density) return REGION_CHIP;
+        if (x >= suggestionRect.left && x <= suggestionRect.right) return REGION_SUGGESTION;
+        return REGION_NONE;
+    }
+
+    private int tileAt(float x, float y) {
+        for (int i = 0; i < tileRects.length; i++) {
+            if (tileRects[i].contains(x, y)) return i;
+        }
+        return -1;
+    }
+
+    /** Key in the row under y nearest to x; rows' gaps and side margins map to the nearest key. */
+    Key keyAt(float x, float y) {
+        if (rows == null || rows.isEmpty() || y < keysTop) return null;
+        int r = (int) ((y - keysTop) / rowHeight);
+        r = Math.max(0, Math.min(rows.size() - 1, r));
+        Key best = null;
+        float bestDist = Float.MAX_VALUE;
+        for (Key k : rows.get(r).keys) {
+            float d = x < k.bounds.left ? k.bounds.left - x : x > k.bounds.right ? x - k.bounds.right : 0;
+            if (d < bestDist) {
+                bestDist = d;
+                best = k;
+            }
+        }
+        return best;
+    }
+
+    private void onPointerDown(int id, float x, float y) {
+        if (y < keysTop || stylePanelOpen) {
+            // Strip and style panel accept a single pointer at a time.
+            if (pointers.size() > 0) return;
+            Pointer p = new Pointer(id);
+            if (y < keysTop) {
+                p.region = stripRegionAt(x, y);
+            } else {
+                p.region = REGION_TILE;
+                p.tile = tileAt(x, y);
+            }
+            if (p.region == REGION_NONE) return;
+            pointers.put(id, p);
+            stripPointerId = id;
+            feedback(0);
+            return;
+        }
+        if (stripPointerId >= 0) return;
+        Key key = keyAt(x, y);
+        if (key == null) return;
+
+        // Roll-over: a new touch commits a character key still held by another finger.
+        for (int i = 0; i < pointers.size(); i++) {
+            Pointer other = pointers.valueAt(i);
+            if (other.region == REGION_KEY && !other.consumed && other.key.type == Key.Type.CHAR) {
+                cancelLongPress(other);
+                other.consumed = true;
+                emitChar(other.key, displayCode(other.key));
+            }
+        }
+
+        Pointer p = new Pointer(id);
+        p.region = REGION_KEY;
+        p.key = key;
+        pointers.put(id, p);
+        feedback(key.code);
+
+        switch (key.type) {
+            case DELETE:
+                p.consumed = true;
+                emit(Key.CODE_DELETE);
+                startRepeat();
+                break;
+            case SHIFT:
+                p.consumed = true;
+                onShiftDown(id);
+                scheduleLongPress(p, LONG_PRESS_FUNCTION_MS);
+                break;
+            case SPACE:
+                scheduleLongPress(p, LONG_PRESS_FUNCTION_MS);
+                break;
+            case CHAR:
+                if (key.longPressCode != 0) scheduleLongPress(p, LONG_PRESS_MS);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void onPointerMove(int id, float x, float y) {
+        Pointer p = pointers.get(id);
+        if (p == null) return;
+        if (p.region == REGION_TILE) {
+            int t = tileAt(x, y);
+            if (t != p.tile) p.tile = t;
+            return;
+        }
+        if (p.region != REGION_KEY || p.consumed || p.key.type != Key.Type.CHAR) return;
+        Key k = keyAt(x, y);
+        if (k != null && k != p.key && k.type == Key.Type.CHAR) {
+            // Sliding onto a neighbouring character key retargets the press.
+            cancelLongPress(p);
+            p.key = k;
+            if (k.longPressCode != 0) scheduleLongPress(p, LONG_PRESS_MS);
+        }
+    }
+
+    private void onPointerUp(int id, float x, float y) {
+        Pointer p = pointers.get(id);
+        if (p == null) return;
+        pointers.remove(id);
+        cancelLongPress(p);
+        if (id == stripPointerId) {
+            stripPointerId = -1;
+            if (p.region == REGION_TILE) {
+                if (p.tile >= 0 && p.tile == tileAt(x, y)) {
+                    TextStyle chosen = TextStyle.values()[p.tile];
+                    stylePanelOpen = false;
+                    if (listener != null) listener.onStyleSelected(chosen);
+                }
+            } else if (p.region == stripRegionAt(x, y)) {
+                onStripTap(p.region);
+            }
+            return;
+        }
+        if (p.key.type == Key.Type.DELETE) {
+            stopRepeat();
+            return;
+        }
+        if (p.key.type == Key.Type.SHIFT) {
+            onShiftUp(id);
+            return;
+        }
+        if (p.consumed) return;
+        switch (p.key.type) {
+            case CHAR:
+                emitChar(p.key, displayCode(p.key));
+                break;
+            case SPACE:
+                emit(Key.CODE_SPACE);
+                if (typedInSymbols && (mode == KeyboardLayouts.Mode.SYMBOLS
+                        || mode == KeyboardLayouts.Mode.SYMBOLS2)) {
+                    switchMode(KeyboardLayouts.Mode.LETTERS);
+                }
+                break;
+            case ENTER:
+                emit(Key.CODE_ENTER);
+                break;
+            case FUNCTION:
+                onFunctionKey(p.key.code);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void onStripTap(int region) {
+        if (listener == null) return;
+        switch (region) {
+            case REGION_CHIP:
+                stylePanelOpen = !stylePanelOpen;
+                break;
+            case REGION_SUGGESTION:
+                if (undoWord != null || pendingSlang != null) listener.onSuggestionTap();
+                break;
+            case REGION_SWAG:
+                listener.onSlangToggle();
+                break;
+            case REGION_GEAR:
+                listener.onOpenSettings();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void onFunctionKey(int code) {
+        switch (code) {
+            case Key.CODE_MODE_SYMBOLS:
+                switchMode(KeyboardLayouts.Mode.SYMBOLS);
+                break;
+            case Key.CODE_MODE_SYMBOLS2:
+                switchMode(KeyboardLayouts.Mode.SYMBOLS2);
+                break;
+            case Key.CODE_MODE_ALPHA:
+                switchMode(KeyboardLayouts.Mode.LETTERS);
+                break;
+            case Key.CODE_GLOBE:
+                emit(Key.CODE_GLOBE);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void switchMode(KeyboardLayouts.Mode newMode) {
+        cancelAllPointers();
+        mode = newMode;
+        typedInSymbols = false;
+        if (newMode != KeyboardLayouts.Mode.LETTERS) {
+            shift = Shift.OFF;
+            shiftAuto = false;
+        }
+        rebuildLayout();
+        applyAutoCaps();
+        requestLayout();
+    }
+
+    private void emitChar(Key key, int code) {
+        if (mode == KeyboardLayouts.Mode.SYMBOLS || mode == KeyboardLayouts.Mode.SYMBOLS2) {
+            typedInSymbols = true;
+        }
+        if (shift == Shift.ON) {
+            if (shiftPointerId >= 0) {
+                shiftChordTyped = true;
+            } else {
+                shift = Shift.OFF;
+                shiftAuto = false;
+            }
+        }
+        emit(code);
+    }
+
+    private void emit(int code) {
+        if (listener != null) listener.onKey(code);
+    }
+
+    // ---------------------------------------------------------------- shift
+
+    private void onShiftDown(int pointerId) {
+        long now = SystemClock.uptimeMillis();
+        if (shift == Shift.LOCKED) {
+            shift = Shift.OFF;
+        } else if (shift == Shift.ON && !shiftAuto && now - lastShiftTapTime < DOUBLE_TAP_MS) {
+            shift = Shift.LOCKED;
+        } else if (shift == Shift.ON) {
+            shift = Shift.OFF;
+        } else {
+            shift = Shift.ON;
+            lastShiftTapTime = now;
+        }
+        shiftAuto = false;
+        shiftPointerId = pointerId;
+        shiftChordTyped = false;
+    }
+
+    private void onShiftUp(int pointerId) {
+        if (pointerId != shiftPointerId) return;
+        shiftPointerId = -1;
+        if (shiftChordTyped && shift == Shift.ON) shift = Shift.OFF;
+        shiftChordTyped = false;
+    }
+
+    private void applyAutoCaps() {
+        if (mode != KeyboardLayouts.Mode.LETTERS || shift == Shift.LOCKED || shiftPointerId >= 0) {
+            invalidate();
+            return;
+        }
+        if (autoCapsWanted) {
+            if (shift == Shift.OFF) {
+                shift = Shift.ON;
+                shiftAuto = true;
+            }
+        } else if (shift == Shift.ON && shiftAuto) {
+            shift = Shift.OFF;
+            shiftAuto = false;
+        }
+        invalidate();
+    }
+
+    // ---------------------------------------------------------------- timers
+
+    private void scheduleLongPress(Pointer p, long delay) {
+        cancelLongPress(p);
+        p.longPress = () -> {
+            p.longPress = null;
+            if (pointers.get(p.id) != p) return;
+            onLongPress(p);
+            invalidate();
+        };
+        handler.postDelayed(p.longPress, delay);
+    }
+
+    private void cancelLongPress(Pointer p) {
+        if (p.longPress != null) {
+            handler.removeCallbacks(p.longPress);
+            p.longPress = null;
+        }
+    }
+
+    private void onLongPress(Pointer p) {
+        switch (p.key.type) {
+            case CHAR:
+                if (p.consumed || p.key.longPressCode == 0) return;
+                p.consumed = true;
+                p.longPressShown = p.key.longPressCode;
+                feedback(p.key.code);
+                emitChar(p.key, p.key.longPressCode);
+                break;
+            case SPACE:
+                if (p.consumed) return;
+                p.consumed = true;
+                if (listener != null) listener.onSpaceLongPress();
+                break;
+            case SHIFT:
+                shift = Shift.LOCKED;
+                shiftChordTyped = false;
+                feedback(p.key.code);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void startRepeat() {
+        stopRepeat();
+        repeatRunnable = new Runnable() {
+            @Override
+            public void run() {
+                emit(Key.CODE_DELETE);
+                handler.postDelayed(this, REPEAT_INTERVAL_MS);
+            }
+        };
+        handler.postDelayed(repeatRunnable, REPEAT_START_MS);
+    }
+
+    private void stopRepeat() {
+        if (repeatRunnable != null) {
+            handler.removeCallbacks(repeatRunnable);
+            repeatRunnable = null;
+        }
+    }
+
+    private void cancelAllPointers() {
+        for (int i = 0; i < pointers.size(); i++) cancelLongPress(pointers.valueAt(i));
+        pointers.clear();
+        stripPointerId = -1;
+        if (shiftPointerId >= 0) {
+            shiftPointerId = -1;
+            if (shiftChordTyped && shift == Shift.ON) shift = Shift.OFF;
+            shiftChordTyped = false;
+        }
+        stopRepeat();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        cancelAllPointers();
+        super.onDetachedFromWindow();
+    }
+
+    // ---------------------------------------------------------------- feedback
+
+    private void feedback(int code) {
+        if (haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        if (sound && audio != null) {
+            int effect;
+            switch (code) {
+                case Key.CODE_DELETE:
+                    effect = AudioManager.FX_KEYPRESS_DELETE;
+                    break;
+                case Key.CODE_ENTER:
+                    effect = AudioManager.FX_KEYPRESS_RETURN;
+                    break;
+                case Key.CODE_SPACE:
+                    effect = AudioManager.FX_KEYPRESS_SPACEBAR;
+                    break;
+                default:
+                    effect = AudioManager.FX_KEYPRESS_STANDARD;
+            }
+            audio.playSoundEffect(effect, -1f);
+        }
+    }
+}

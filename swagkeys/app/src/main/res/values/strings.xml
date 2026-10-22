@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SwagKeys</string>
+    <string name="ime_name">SwagKeys</string>
+    <string name="subtype_en_us">English (US)</string>
+    <string name="tagline">dot-matrix keyboard. l33t styles. swag slang.</string>
+
+    <string name="enable_keyboard">Enable SwagKeys</string>
+    <string name="select_keyboard">Switch to SwagKeys</string>
+    <string name="status_enabled">● Enabled in system settings</string>
+    <string name="status_not_enabled">○ Not enabled yet: tap the button below and turn on SwagKeys</string>
+    <string name="status_selected">● Current keyboard</string>
+    <string name="status_not_selected">○ Not the current keyboard</string>
+
+    <string name="style_note">Applied as you type. Change it any time from the style chip on the keyboard. Passwords, e-mail, URLs and number fields are never styled.</string>
+
+    <string name="slang_toggle">Auto-correct to swag slang</string>
+    <string name="slang_note">Dictionary entries: %1$d. A listed word is replaced when you finish it (space, punctuation or enter). Press delete right after a replacement, or tap UNDO in the strip, to restore what you typed. The SWAG pill on the keyboard toggles this.</string>
+    <string name="show_dictionary">Show dictionary</string>
+    <string name="hide_dictionary">Hide dictionary</string>
+
+    <string name="theme_system">Follow system</string>
+    <string name="theme_dark">Dark (Nothing black)</string>
+    <string name="theme_light">Light (Nothing white)</string>
+
+    <string name="font_note">Nothing OS uses its NDot typefaces, which Nothing licenses for Nothing brand use only, so they are not bundled. SwagKeys ships Doto, an open-source (SIL OFL 1.1) dot-matrix face in the same style. If you have a font file such as NDot 57, import it here.</string>
+    <string name="font_doto">Doto (bundled)</string>
+    <string name="font_custom">Imported font</string>
+    <string name="import_font">Import .ttf / .otf</string>
+    <string name="font_imported">Imported: %1$s</string>
+    <string name="font_none_imported">No font imported</string>
+    <string name="font_invalid">That file is not a usable TrueType/OpenType font</string>
+    <string name="font_import_ok">Font imported</string>
+    <string name="font_import_failed">Import failed: %1$s</string>
+    <string name="font_picker_missing">No file picker available</string>
+
+    <string name="haptics">Vibrate on key press</string>
+    <string name="sound">Sound on key press</string>
+
+    <string name="try_hint">Type here to test: try \"hello friend this is so cool\"</string>
+
+    <string name="credits">Doto typeface © 2024 The Doto Project Authors (github.com/oliverlalan/Doto), licensed under the SIL Open Font License 1.1. Not affiliated with Nothing Technology Ltd.</string>
+    <string name="show_license">Show font license</string>
+</resources>

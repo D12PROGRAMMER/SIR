@@ -1,0 +1,77 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing is read from keystore.properties (storeFile, storePassword, keyAlias,
+// keyPassword) when present; otherwise the release build falls back to the debug key so
+// that `assembleRelease` always yields an installable APK.
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
+android {
+    namespace 'dev.swagkeys'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'dev.swagkeys'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            release {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig keystorePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            all {
+                // Robolectric downloads android-all jars at test time; use the same mirror as Gradle.
+                systemProperty 'robolectric.dependency.repo.url',
+                        'https://maven-central.storage-download.googleapis.com/maven2/'
+                systemProperty 'robolectric.graphicsMode', 'NATIVE'
+                // Robolectric's SDK 36 sandbox accesses FileDescriptor internals.
+                jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED',
+                        '--add-exports=java.base/jdk.internal.access=ALL-UNNAMED'
+                systemProperty 'swagkeys.screenshotDir',
+                        layout.buildDirectory.dir('screenshots').get().asFile.absolutePath
+            }
+        }
+    }
+
+    lint {
+        abortOnError true
+        warningsAsErrors false
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.17'
+}
