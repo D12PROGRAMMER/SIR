@@ -500,6 +500,37 @@ public class InputLogicTest {
         logic.moveCursor(10);
         editor.deliverUpdates();
         assertEquals(editor.value().length(), editor.selStart);
+        // Clamped at the end: no arrow key escapes the field.
+        assertEquals(0, editor.edgeEscapes);
+        logic.moveCursor(-100);
+        editor.deliverUpdates();
+        assertEquals(0, editor.selStart);
+        assertEquals(0, editor.edgeEscapes);
+    }
+
+    @Test
+    public void cursorMoveCountsGraphemesAndHandlesRtl() {
+        start("a👍🏽b", FieldConfig.Mode.STYLED, false, TextStyle.NORMAL);
+        logic.moveCursor(-3);
+        editor.deliverUpdates();
+        assertEquals(0, editor.edgeEscapes);
+        assertEquals(3, editor.keys.size());
+        // In a right-to-left paragraph, "left" moves toward the end: nothing to pass here.
+        start("\u05E9\u05DC\u05D5\u05DD", FieldConfig.Mode.STYLED, false, TextStyle.NORMAL);
+        logic.moveCursor(-2);
+        assertEquals(0, editor.keys.size());
+        assertTrue(InputLogic.isRtlParagraph("abc\n\u05E9", ""));
+        assertFalse(InputLogic.isRtlParagraph("\u05E9\nabc", ""));
+    }
+
+    @Test
+    public void deleteWordsInSpacedStyleRemovesWholeWords() {
+        start("", FieldConfig.Mode.STYLED, false, TextStyle.SPACED);
+        type("hello world ");
+        assertEquals("h e l l o   w o r l d   ", editor.value());
+        logic.deleteWords(1);
+        editor.deliverUpdates();
+        assertEquals("h e l l o   ", editor.value());
     }
 
     @Test

@@ -159,11 +159,23 @@ final class FakeEditor implements Editor {
     }
 
     final List<Integer> keys = new ArrayList<>();
+    /** Arrow keys sent at the edge of the text; a real editor would let focus leave. */
+    int edgeEscapes;
+
+    @Override
+    public CharSequence getTextAfterCursor(int n) {
+        return text.substring(selEnd, Math.min(text.length(), selEnd + n));
+    }
 
     /** Arrow keys move the cursor one code point, collapsing any selection; other keys are logged. */
     @Override
     public void sendKey(int keyCode) {
         keys.add(keyCode);
+        boolean collapsed = selStart == selEnd;
+        if (collapsed && ((keyCode == InputLogic.KEYCODE_DPAD_LEFT && selStart == 0)
+                || (keyCode == InputLogic.KEYCODE_DPAD_RIGHT && selEnd == text.length()))) {
+            edgeEscapes++;
+        }
         if (keyCode == InputLogic.KEYCODE_DPAD_LEFT) {
             int to = selStart != selEnd ? selStart
                     : selStart > 0 ? selStart - Character.charCount(text.codePointBefore(selStart)) : 0;

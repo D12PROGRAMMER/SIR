@@ -125,6 +125,8 @@ public final class SettingsActivity extends Activity {
         bodyFont = Typeface.create("sans-serif", Typeface.NORMAL);
 
         ScrollView scroll = new ScrollView(this);
+        // Ids let ScrollView and the test field keep their state across recreate().
+        scroll.setId(R.id.settings_scroll);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(palette.background);
         getWindow().getDecorView().setBackgroundColor(palette.background);
@@ -235,6 +237,7 @@ public final class SettingsActivity extends Activity {
             swatch.setShape(GradientDrawable.OVAL);
             swatch.setColor(Palette.accentColor(a[0]));
             swatch.setSize(dp(18), dp(18));
+            swatch.setStroke(Math.max(1, dp(1)), palette.outline);
             rb.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, swatch, null);
             rb.setCompoundDrawablePadding(dp(12));
             accents.addView(rb);
@@ -297,6 +300,7 @@ public final class SettingsActivity extends Activity {
         // Try it
         root.addView(header("10  TRY IT"));
         EditText field = new EditText(this);
+        field.setId(R.id.try_field);
         field.setHint(R.string.try_hint);
         field.setTextColor(palette.text);
         field.setHintTextColor(palette.textSecondary);
@@ -386,7 +390,7 @@ public final class SettingsActivity extends Activity {
     }
 
     private TextView header(String s) {
-        TextView t = text(s, 20, palette.accent);
+        TextView t = text(s, 20, palette.accentInk);
         t.setTypeface(headFont);
         LinearLayout.LayoutParams lp = matchWrap(dp(28));
         t.setLayoutParams(lp);
@@ -449,7 +453,7 @@ public final class SettingsActivity extends Activity {
     private ColorStateList tint() {
         return new ColorStateList(
                 new int[][] {{android.R.attr.state_checked}, {}},
-                new int[] {palette.accent, palette.textSecondary});
+                new int[] {palette.accentInk, palette.textSecondary});
     }
 
     private GradientDrawable outline(int fillColor) {
@@ -478,9 +482,9 @@ public final class SettingsActivity extends Activity {
         boolean enabled = isEnabled();
         boolean selected = isSelected();
         enabledStatus.setText(enabled ? R.string.status_enabled : R.string.status_not_enabled);
-        enabledStatus.setTextColor(enabled ? palette.text : palette.accent);
+        enabledStatus.setTextColor(enabled ? palette.text : palette.accentInk);
         selectedStatus.setText(selected ? R.string.status_selected : R.string.status_not_selected);
-        selectedStatus.setTextColor(selected ? palette.text : palette.accent);
+        selectedStatus.setTextColor(selected ? palette.text : palette.accentInk);
     }
 
     private String imeId() {

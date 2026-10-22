@@ -10,6 +10,9 @@ public interface Editor {
     /** Returns up to {@code n} chars before the cursor, or {@code null} if unavailable. */
     CharSequence getTextBeforeCursor(int n);
 
+    /** Returns up to {@code n} chars after the cursor, or {@code null} if unavailable. */
+    CharSequence getTextAfterCursor(int n);
+
     /** Returns the selected text, or {@code null} if none or unavailable. */
     CharSequence getSelectedText();
 

@@ -738,17 +738,18 @@ public class KeyboardRenderTest {
         float x = del.bounds.centerX();
         float y = del.bounds.centerY();
         touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
-        assertEquals(List.of(Key.CODE_DELETE), keys);
+        assertTrue(keys.isEmpty()); // the first delete waits for release or repeat
         for (int i = 1; i <= 12; i++) {
             touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - i * 9 * density, y}});
         }
         ShadowLooper.idleMainLooper(200, java.util.concurrent.TimeUnit.MILLISECONDS);
         shot("13_delete_words");
-        // No key repeat while selecting words.
+        // No key repeat and no character delete while selecting words.
         ShadowLooper.idleMainLooper(600, java.util.concurrent.TimeUnit.MILLISECONDS);
-        assertEquals(List.of(Key.CODE_DELETE), keys);
+        assertTrue(keys.isEmpty());
         touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 108 * density, y}});
         assertEquals(List.of(3), deletedWords);
+        assertTrue(keys.isEmpty());
 
         // Sliding back to the key cancels.
         touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
@@ -756,6 +757,77 @@ public class KeyboardRenderTest {
         touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - 2 * density, y}});
         touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 2 * density, y}});
         assertEquals(List.of(3), deletedWords);
+        assertTrue(keys.isEmpty());
+    }
+
+    @Test
+    public void deleteTapAndRollOverKeepOrder() {
+        tap(find(Key.CODE_DELETE));
+        assertEquals(List.of(Key.CODE_DELETE), keys);
+        keys.clear();
+        Key del = find(Key.CODE_DELETE);
+        Key a = find('a');
+        float[] pd = {del.bounds.centerX(), del.bounds.centerY()};
+        float[] pa = {a.bounds.centerX(), a.bounds.centerY()};
+        touch(MotionEvent.ACTION_DOWN, 0, new int[] {0}, new float[][] {pd});
+        touch(MotionEvent.ACTION_POINTER_DOWN, 1, new int[] {0, 1}, new float[][] {pd, pa});
+        touch(MotionEvent.ACTION_POINTER_UP, 1, new int[] {0, 1}, new float[][] {pd, pa});
+        touch(MotionEvent.ACTION_UP, 0, new int[] {0}, new float[][] {pd});
+        assertEquals(List.of(Key.CODE_DELETE, (int) 'a'), keys);
+    }
+
+    @Test
+    public void spaceSwipeIgnoredAfterRollOver() {
+        Key space = find(Key.CODE_SPACE);
+        Key b = find('b');
+        float density = context.getResources().getDisplayMetrics().density;
+        float[] ps = {space.bounds.centerX(), space.bounds.centerY()};
+        float[] pb = {b.bounds.centerX(), b.bounds.centerY()};
+        touch(MotionEvent.ACTION_DOWN, 0, new int[] {0}, new float[][] {ps});
+        touch(MotionEvent.ACTION_POINTER_DOWN, 1, new int[] {0, 1}, new float[][] {ps, pb});
+        float[] moved = {ps[0] - 60 * density, ps[1]};
+        touch(MotionEvent.ACTION_MOVE, 0, new int[] {0, 1}, new float[][] {moved, pb});
+        assertTrue(cursorSteps.isEmpty());
+        touch(MotionEvent.ACTION_POINTER_UP, 1, new int[] {0, 1}, new float[][] {moved, pb});
+        touch(MotionEvent.ACTION_UP, 0, new int[] {0}, new float[][] {moved});
+        assertEquals(List.of((int) ' ', (int) 'b'), keys);
+    }
+
+    @Test
+    public void numberRowKeepsHeightAcrossModes() {
+        view.setNumberRow(true);
+        layout();
+        int letters = view.getMeasuredHeight();
+        tap(find(Key.CODE_MODE_SYMBOLS));
+        layout();
+        assertEquals(letters, view.getMeasuredHeight());
+        assertEquals(4, view.rows().size());
+        // Four symbol rows fill the five-row area: each is taller than a letter row.
+        float density = context.getResources().getDisplayMetrics().density;
+        assertTrue(find('1').bounds.height() > 60 * density);
+    }
+
+    @Test
+    public void wordDeleteDisabledKeepsRepeating() {
+        view.setWordDeleteEnabled(false);
+        Key del = find(Key.CODE_DELETE);
+        float density = context.getResources().getDisplayMetrics().density;
+        float x = del.bounds.centerX();
+        float y = del.bounds.centerY();
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
+        touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - 80 * density, y}});
+        ShadowLooper.idleMainLooper(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 80 * density, y}});
+        assertTrue(deletedWords.isEmpty());
+        assertTrue(keys.size() >= 2);
+    }
+
+    @Test
+    public void decodeResolvesStyledTextWithinItsDuration() {
+        for (TextStyle s : new TextStyle[] {TextStyle.CURSED, TextStyle.STRIKE, TextStyle.SPACED}) {
+            String target = s.apply("straight trash");
+            assertEquals(s.name(), target, KeyboardView.decodeFrame(target, 899));
+        }
     }
 
     @Test

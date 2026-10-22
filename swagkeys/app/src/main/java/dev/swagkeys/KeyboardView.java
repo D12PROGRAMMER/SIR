@@ -124,6 +124,9 @@ public final class KeyboardView extends View {
         /** Delete swipe in progress: number of words selected for deletion. */
         boolean wordDelete;
         int wordDeleteCount;
+        long bubbleStart;
+        /** A delete for this press was already sent (repeat or roll-over). */
+        boolean deleteFired;
 
         Pointer(int id) {
             this.id = id;
@@ -171,6 +174,8 @@ public final class KeyboardView extends View {
     private final float density;
     private float stripHeight;
     private float rowHeight;
+    /** Height of one key row: the key area (fixed per field) divided by the layout's rows. */
+    private float keyRowHeight;
     private float padTop;
     private float padBottom;
     private float padH;
@@ -241,12 +246,25 @@ public final class KeyboardView extends View {
     private static final int MAX_RIPPLES = 6;
     private static final String DECODE_GLYPHS = "#%&@$*+=?!<>/01";
     private boolean animations = true;
-    private final List<float[]> ripples = new ArrayList<>();   // {x, y, startTime}
+    private static final class Ripple {
+        final float x;
+        final float y;
+        final long start;
+
+        Ripple(float x, float y, long start) {
+            this.x = x;
+            this.y = y;
+            this.start = start;
+        }
+    }
+
+    private final List<Ripple> ripples = new ArrayList<>();
     private final java.util.Map<Key, Long> keyReleases = new java.util.HashMap<>();
     private long panelAnimStart = -1;
     private String slangAnimText;
     private long slangAnimStart = -1;
     private boolean numberRow;
+    private boolean wordDeleteEnabled = true;
     private float dotCell;
 
     // Touch
@@ -337,6 +355,11 @@ public final class KeyboardView extends View {
         invalidate();
     }
 
+    /** Word deletion by swiping left from delete; off where it cannot work (TYPE_NULL). */
+    public void setWordDeleteEnabled(boolean on) {
+        wordDeleteEnabled = on;
+    }
+
     /** Shows a row of digits above the letters. */
     public void setNumberRow(boolean on) {
         if (numberRow == on) return;
@@ -345,6 +368,12 @@ public final class KeyboardView extends View {
         rebuildLayout();
         requestLayout();
         notifyA11yLayoutChanged();
+    }
+
+    /** Stops the decode effect, e.g. when the substitution it shows was undone. */
+    public void cancelSlangAnimation() {
+        slangAnimStart = -1;
+        invalidate();
     }
 
     /** Plays the "decode" animation for a slang replacement that was just applied. */
@@ -375,6 +404,7 @@ public final class KeyboardView extends View {
         shift = Shift.OFF;
         shiftAuto = false;
         rebuildLayout();
+        requestLayout();
         applyAutoCaps();
         invalidate();
         notifyA11yLayoutChanged();
@@ -388,6 +418,8 @@ public final class KeyboardView extends View {
         this.slangMode = slangMode;
         this.pendingSlang = pendingSlang;
         this.undoWord = undoWord;
+        // A new suggestion must not stay hidden behind the previous word's decode effect.
+        if (pendingSlang != null) slangAnimStart = -1;
         invalidate();
     }
 
@@ -460,8 +492,7 @@ public final class KeyboardView extends View {
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         int width = MeasureSpec.getSize(widthMeasureSpec);
-        int rowsCount = rows == null ? 4 : rows.size();
-        int height = Math.round(padTop + stripHeight + rowsCount * rowHeight + padBottom) + insetBottom;
+        int height = Math.round(padTop + stripHeight + areaHeight() + padBottom) + insetBottom;
         setMeasuredDimension(width, height);
     }
 
@@ -472,8 +503,20 @@ public final class KeyboardView extends View {
     }
 
     private void rebuildLayout() {
+        // Old Key objects are discarded; their release animations can never be drawn again.
+        keyReleases.clear();
         rows = KeyboardLayouts.build(mode, fieldLayout, enterKeyFor(enterAction, enterLabel), numberRow);
         computeGeometry();
+    }
+
+    /**
+     * Height of the key area. It depends on the field, not the current mode, so switching
+     * between letters (5 rows with the number row) and symbols (4 rows) keeps the keyboard
+     * height and the app's layout steady; fewer rows are drawn taller instead.
+     */
+    private float areaHeight() {
+        int areaRows = numberRow && fieldLayout == FieldConfig.Layout.TEXT ? 5 : 4;
+        return areaRows * rowHeight;
     }
 
     static Key enterKeyFor(int action, String customLabel) {
@@ -504,13 +547,14 @@ public final class KeyboardView extends View {
         if (width == 0 || rows == null) return;
         keysTop = padTop + stripHeight;
         float unit = (width - 2 * padH) / KeyboardLayouts.ROW_UNITS;
+        keyRowHeight = areaHeight() / rows.size();
         for (int r = 0; r < rows.size(); r++) {
             KeyboardLayouts.Row row = rows.get(r);
             float x = padH + row.offset * unit;
-            float top = keysTop + r * rowHeight;
+            float top = keysTop + r * keyRowHeight;
             for (Key k : row.keys) {
                 float w = k.weight * unit;
-                k.bounds.set(x, top, x + w, top + rowHeight);
+                k.bounds.set(x, top, x + w, top + keyRowHeight);
                 x += w;
             }
         }
@@ -530,7 +574,7 @@ public final class KeyboardView extends View {
         suggestionRect.set(chipRect.right + 8 * density, padTop,
                 swagRect.left - 8 * density, padTop + stripHeight);
         // Emoji panel: grid over the first rows, bottom row = ABC, category tabs, delete.
-        float areaBottom = keysTop + rows.size() * rowHeight;
+        float areaBottom = keysTop + areaHeight();
         float barTop = areaBottom - rowHeight;
         emojiGridRect.set(padH, keysTop, width - padH, barTop);
         emojiAbcKey.bounds.set(padH, barTop, padH + 1.5f * unit, areaBottom);
@@ -543,7 +587,7 @@ public final class KeyboardView extends View {
         int cols = tileRects.length > 9 ? 5 : 3;
         int count = tileRects.length;
         int tileRows = (count + cols - 1) / cols;
-        float areaH = (rows.size() * rowHeight);
+        float areaH = areaHeight();
         float tileW = (width - 2 * padH) / cols;
         float tileH = areaH / tileRows;
         for (int i = 0; i < count; i++) {
@@ -604,7 +648,7 @@ public final class KeyboardView extends View {
                 for (Key k : row.keys) {
                     float scale = keyScale(k, now);
                     if (scale != 1f) {
-                        animating = true;
+                        if (keyScaleChanging(k, now)) animating = true;
                         int c = canvas.save();
                         canvas.scale(scale, scale, k.bounds.centerX(), k.bounds.centerY());
                         drawKey(canvas, k, isPressed(k));
@@ -652,6 +696,13 @@ public final class KeyboardView extends View {
         return 0.92f + 0.08f * easeOutBack(Math.max(0f, t));
     }
 
+    /** Whether the key's scale is still moving (a settled pressed key needs no new frames). */
+    private boolean keyScaleChanging(Key k, long now) {
+        Pointer p = pointerOn(k);
+        if (p != null) return now - p.downTime < KEY_PRESS_MS;
+        return keyReleases.containsKey(k);
+    }
+
     private Pointer pointerOn(Key k) {
         for (int i = 0; i < pointers.size(); i++) {
             Pointer p = pointers.valueAt(i);
@@ -663,7 +714,7 @@ public final class KeyboardView extends View {
     private void addRipple(float x, float y) {
         if (!animations) return;
         if (ripples.size() >= MAX_RIPPLES) ripples.remove(0);
-        ripples.add(new float[] {x, y, SystemClock.uptimeMillis()});
+        ripples.add(new Ripple(x, y, SystemClock.uptimeMillis()));
     }
 
     /**
@@ -675,10 +726,10 @@ public final class KeyboardView extends View {
         float maxR = 150 * density;
         float ringW = 20 * density;
         float dotR = 1.6f * density;
-        int baseAlpha = Color.alpha(palette.accent);
+        int baseAlpha = Color.alpha(palette.accentInk);
         for (int n = ripples.size() - 1; n >= 0; n--) {
-            float[] r = ripples.get(n);
-            float t = (now - (long) r[2]) / (float) RIPPLE_MS;
+            Ripple r = ripples.get(n);
+            float t = (now - r.start) / (float) RIPPLE_MS;
             if (t >= 1f) {
                 ripples.remove(n);
                 continue;
@@ -686,10 +737,10 @@ public final class KeyboardView extends View {
             t = Math.max(0f, t);
             float radius = easeOutCubic(t) * maxR;
             float fade = 1f - t;
-            float x0 = Math.max(0, r[0] - radius - ringW);
-            float x1 = Math.min(getWidth(), r[0] + radius + ringW);
-            float y0 = Math.max(0, r[1] - radius - ringW);
-            float y1 = Math.min(getHeight(), r[1] + radius + ringW);
+            float x0 = Math.max(0, r.x - radius - ringW);
+            float x1 = Math.min(getWidth(), r.x + radius + ringW);
+            float y0 = Math.max(0, r.y - radius - ringW);
+            float y1 = Math.min(getHeight(), r.y + radius + ringW);
             int i0 = (int) Math.floor(x0 / dotCell);
             int i1 = (int) Math.ceil(x1 / dotCell);
             int j0 = (int) Math.floor(y0 / dotCell);
@@ -698,11 +749,11 @@ public final class KeyboardView extends View {
                 float cy = (j + 0.5f) * dotCell;
                 for (int i = i0; i <= i1; i++) {
                     float cx = (i + 0.5f) * dotCell;
-                    float d = (float) Math.hypot(cx - r[0], cy - r[1]);
+                    float d = (float) Math.hypot(cx - r.x, cy - r.y);
                     float off = Math.abs(d - radius);
                     if (off >= ringW) continue;
                     float k = 1f - off / ringW;
-                    fill.setColor(palette.accent);
+                    fill.setColor(palette.accentInk);
                     fill.setAlpha(Math.round(baseAlpha * 0.85f * fade * k));
                     canvas.drawCircle(cx, cy, dotR * (0.6f + 0.8f * k), fill);
                 }
@@ -722,7 +773,7 @@ public final class KeyboardView extends View {
         canvas.drawRoundRect(chipRect, pillRadius, pillRadius, fill);
         stroke.setColor(palette.outline);
         canvas.drawRoundRect(chipRect, pillRadius, pillRadius, stroke);
-        fill.setColor(stylesActive && style != TextStyle.NORMAL ? palette.accent : palette.textSecondary);
+        fill.setColor(stylesActive && style != TextStyle.NORMAL ? palette.accentInk : palette.textSecondary);
         float dotR = 3 * density;
         float dotX = chipRect.left + 12 * density;
         canvas.drawCircle(dotX, chipRect.centerY(), dotR, fill);
@@ -743,14 +794,14 @@ public final class KeyboardView extends View {
         if (decodeT >= 1f) slangAnimStart = -1;
         if (animations && decodeT < 1f && slangAnimText != null) {
             suggestion = decodeFrame(slangAnimText, now - slangAnimStart);
-            suggestionColor = palette.accent;
+            suggestionColor = palette.accentInk;
             animating = true;
         } else if (undoWord != null) {
             suggestion = "UNDO: " + undoWord;
             suggestionColor = palette.textSecondary;
         } else if (pendingSlang != null) {
             suggestion = "→ " + (stylesActive ? style.apply(pendingSlang) : pendingSlang);
-            suggestionColor = palette.accent;
+            suggestionColor = palette.accentInk;
         }
         if (suggestion != null) {
             if (isRegionPressed(REGION_SUGGESTION)) {
@@ -780,15 +831,15 @@ public final class KeyboardView extends View {
         if (slangOn && slangMode == SLANG_AUTO) {
             fill.setColor(swagPressed ? palette.keyPressed : palette.accent);
             canvas.drawRoundRect(swagRect, pillRadius, pillRadius, fill);
-            text.setColor(palette.onAccent);
+            text.setColor(swagPressed ? palette.text : palette.onAccent);
         } else {
-            // Suggest-only fields: red outline; disabled or not applicable: grey outline.
+            // Suggest-only fields: accent outline; disabled or not applicable: grey outline.
             boolean suggestOnly = slangOn && slangMode == SLANG_SUGGEST;
             fill.setColor(swagPressed ? palette.keyPressed : palette.key);
             canvas.drawRoundRect(swagRect, pillRadius, pillRadius, fill);
-            stroke.setColor(suggestOnly ? palette.accent : palette.outline);
+            stroke.setColor(suggestOnly ? palette.accentInk : palette.outline);
             canvas.drawRoundRect(swagRect, pillRadius, pillRadius, stroke);
-            text.setColor(suggestOnly ? palette.accent : palette.textSecondary);
+            text.setColor(suggestOnly ? palette.accentInk : palette.textSecondary);
         }
         text.setTextAlign(Paint.Align.CENTER);
         text.setTextSize(swagRect.height() * 0.52f);
@@ -812,23 +863,49 @@ public final class KeyboardView extends View {
      * cycle through glyph noise (deterministic per position and 40 ms frame).
      */
     static String decodeFrame(String target, long elapsedMs) {
-        StringBuilder out = new StringBuilder(target.length());
-        long frame = elapsedMs / 40;
-        int index = 0;
+        // One reveal slot per base character: combining marks, joiners and variation selectors
+        // follow their base, whitespace is shown at once; the stagger fits the duration.
+        int bases = 0;
         for (int i = 0; i < target.length(); ) {
             int cp = target.codePointAt(i);
             i += Character.charCount(cp);
-            long revealAt = 120 + index * 55L;
-            if (elapsedMs >= revealAt || Character.isWhitespace(cp)) {
+            if (!Character.isWhitespace(cp) && !isAttachingMark(cp)) bases++;
+        }
+        long step = Math.min(55, (SLANG_DECODE_MS - 270) / Math.max(1, bases - 1));
+        StringBuilder out = new StringBuilder(target.length());
+        long frame = elapsedMs / 40;
+        int index = -1;
+        boolean lastRevealed = true;
+        for (int i = 0; i < target.length(); ) {
+            int cp = target.codePointAt(i);
+            i += Character.charCount(cp);
+            if (Character.isWhitespace(cp)) {
+                out.appendCodePoint(cp);
+                continue;
+            }
+            if (isAttachingMark(cp)) {
+                if (lastRevealed) out.appendCodePoint(cp);
+                continue;
+            }
+            index++;
+            lastRevealed = elapsedMs >= 120 + index * step;
+            if (lastRevealed) {
                 out.appendCodePoint(cp);
             } else {
                 int h = (int) ((index * 7919 + frame * 104729) ^ (frame >>> 3));
                 out.append(DECODE_GLYPHS.charAt(Math.floorMod(h, DECODE_GLYPHS.length())));
             }
-            index++;
         }
         return out.toString();
     }
+
+    private static boolean isAttachingMark(int cp) {
+        if (cp == 0x200D || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x1F3FB && cp <= 0x1F3FF)) return true;
+        int type = Character.getType(cp);
+        return type == Character.NON_SPACING_MARK || type == Character.ENCLOSING_MARK
+                || type == Character.COMBINING_SPACING_MARK;
+    }
+
 
     private void drawKey(Canvas canvas, Key k, boolean pressed) {
         tmp.set(k.bounds.left + keyInsetH, k.bounds.top + keyInsetV,
@@ -838,12 +915,12 @@ public final class KeyboardView extends View {
         switch (k.type) {
             case ENTER:
                 bg = pressed ? palette.keyPressed : palette.accent;
-                fg = palette.onAccent;
+                fg = pressed ? palette.text : palette.onAccent;
                 break;
             case SHIFT:
                 if (shift == Shift.LOCKED) {
                     bg = pressed ? palette.keyPressed : palette.accent;
-                    fg = palette.onAccent;
+                    fg = pressed ? palette.text : palette.onAccent;
                 } else {
                     bg = pressed ? palette.keyPressed : palette.keyFunction;
                 }
@@ -878,7 +955,7 @@ public final class KeyboardView extends View {
         }
         text.setTextAlign(Paint.Align.CENTER);
         if (k.type == Key.Type.SPACE && pointerOn(k) != null && pointerOn(k).cursorMode) {
-            fill.setColor(palette.accent);
+            fill.setColor(palette.accentInk);
             float size = rowHeight * 0.32f;
             DotIcon.ARROW_LEFT.draw(canvas, cx - size * 1.6f, cy, size, fill);
             DotIcon.ARROW_RIGHT.draw(canvas, cx + size * 1.6f, cy, size, fill);
@@ -942,18 +1019,19 @@ public final class KeyboardView extends View {
             int c = canvas.save();
             if (animations) {
                 // Pop in from the key: scale up with a slight overshoot.
-                float t = Math.min(1f, (now - p.downTime) / (float) PREVIEW_POP_MS);
+                long start = wordBubble ? p.bubbleStart : p.downTime;
+                float t = Math.min(1f, (now - start) / (float) PREVIEW_POP_MS);
                 if (t < 1f) animating = true;
                 float scale = 0.6f + 0.4f * easeOutBack(Math.max(0f, t));
                 canvas.scale(scale, scale, tmp.centerX(), tmp.bottom);
             }
             fill.setColor(palette.keyPressed);
             canvas.drawRoundRect(tmp, radius, radius, fill);
-            stroke.setColor(palette.accent);
+            stroke.setColor(palette.accentInk);
             canvas.drawRoundRect(tmp, radius, radius, stroke);
             text.setTypeface(wordBubble ? uiFont : keyFont);
             text.setTextAlign(Paint.Align.CENTER);
-            text.setColor(wordBubble ? palette.accent : palette.text);
+            text.setColor(palette.text);
             fitTextSize(glyph, tmp.width() - 12 * density, rowHeight * (wordBubble ? 0.36f : 0.62f));
             canvas.drawText(glyph, tmp.centerX(), baseline(tmp.centerY()), text);
             canvas.restoreToCount(c);
@@ -973,7 +1051,7 @@ public final class KeyboardView extends View {
             fill.setColor(pressed ? palette.keyPressed : palette.key);
             canvas.drawRoundRect(tmp, radius, radius, fill);
             if (styles[i] == style) {
-                stroke.setColor(palette.accent);
+                stroke.setColor(palette.accentInk);
                 canvas.drawRoundRect(tmp, radius, radius, stroke);
             }
             String sample = styles[i].apply(PANEL_SAMPLE);
@@ -983,7 +1061,7 @@ public final class KeyboardView extends View {
             fitTextSize(sample, tmp.width() - 12 * density, tmp.height() * 0.38f);
             canvas.drawText(sample, tmp.centerX(), baseline(tmp.top + tmp.height() * 0.42f), text);
             text.setTypeface(uiFont);
-            text.setColor(styles[i] == style ? palette.accent : palette.textSecondary);
+            text.setColor(styles[i] == style ? palette.accentInk : palette.textSecondary);
             fitTextSize(styles[i].label, tmp.width() - 12 * density, tmp.height() * 0.2f);
             canvas.drawText(styles[i].label, tmp.centerX(), baseline(tmp.top + tmp.height() * 0.78f), text);
         }
@@ -1048,7 +1126,7 @@ public final class KeyboardView extends View {
             text.setTextSize(Math.min(r.height() * 0.4f, r.width() * 0.62f));
             canvas.drawText(emojiTabIcons.get(i), r.centerX(), baseline(r.centerY() - 2 * density), text);
             if (selected) {
-                fill.setColor(palette.accent);
+                fill.setColor(palette.accentInk);
                 canvas.drawCircle(r.centerX(), r.bottom - keyInsetV - 4 * density, 2.5f * density, fill);
             }
         }
@@ -1060,7 +1138,7 @@ public final class KeyboardView extends View {
     private void drawEmojiPopup(Canvas canvas) {
         fill.setColor(palette.keyFunction);
         canvas.drawRoundRect(emojiPopupRect, radius, radius, fill);
-        stroke.setColor(palette.accent);
+        stroke.setColor(palette.accentInk);
         canvas.drawRoundRect(emojiPopupRect, radius, radius, stroke);
         text.setTypeface(Typeface.DEFAULT);
         text.setTextAlign(Paint.Align.CENTER);
@@ -1160,13 +1238,13 @@ public final class KeyboardView extends View {
 
     /** Bottom of the key area; below it lies padding and the navigation-bar inset band. */
     private float keysBottom() {
-        return keysTop + (rows == null ? 0 : rows.size()) * rowHeight + padBottom;
+        return keysTop + areaHeight() + padBottom;
     }
 
     /** Key in the row under y nearest to x; rows' gaps and side margins map to the nearest key. */
     Key keyAt(float x, float y) {
         if (rows == null || rows.isEmpty() || y < keysTop) return null;
-        int r = (int) ((y - keysTop) / rowHeight);
+        int r = (int) ((y - keysTop) / keyRowHeight);
         r = Math.max(0, Math.min(rows.size() - 1, r));
         Key best = null;
         float bestDist = Float.MAX_VALUE;
@@ -1218,6 +1296,12 @@ public final class KeyboardView extends View {
         // finger, so output order follows press order.
         for (int i = 0; i < pointers.size(); i++) {
             Pointer other = pointers.valueAt(i);
+            if (other.region == REGION_KEY && other.key.type == Key.Type.DELETE
+                    && !other.deleteFired && !other.wordDelete) {
+                // A held delete that has not fired yet still counts as pressed first.
+                other.deleteFired = true;
+                emit(Key.CODE_DELETE);
+            }
             if (other.region != REGION_KEY || other.consumed) continue;
             if (other.key.type == Key.Type.CHAR) {
                 cancelLongPress(other);
@@ -1243,9 +1327,10 @@ public final class KeyboardView extends View {
 
         switch (key.type) {
             case DELETE:
+                // The first delete waits for release (or repeat), so a swipe left can turn the
+                // press into word deletion without also deleting a character.
                 p.consumed = true;
-                emit(Key.CODE_DELETE);
-                startRepeat();
+                startRepeat(p);
                 break;
             case SHIFT:
                 p.consumed = true;
@@ -1328,6 +1413,8 @@ public final class KeyboardView extends View {
 
     /** Space-bar swipe: horizontal movement past slop moves the cursor in fixed steps. */
     private void onSpaceMove(Pointer p, float x) {
+        // A press already used by roll-over or the keyboard-picker long press stays used.
+        if (p.consumed && !p.cursorMode) return;
         float step = 10 * density;
         if (!p.cursorMode) {
             if (Math.abs(x - p.downX) <= touchSlop * 1.5f) return;
@@ -1345,13 +1432,14 @@ public final class KeyboardView extends View {
 
     /** Swipe left from delete: every 36 dp selects one more word; moving back reduces it. */
     private void onDeleteMove(Pointer p, float x) {
+        if (!wordDeleteEnabled) return;
         float start = touchSlop * 2f;
         float dx = p.downX - x;
         if (!p.wordDelete) {
             if (dx <= start) return;
             p.wordDelete = true;
             stopRepeat();
-            p.downTime = SystemClock.uptimeMillis(); // pop the word bubble in
+            p.bubbleStart = SystemClock.uptimeMillis(); // pop the word bubble in
         }
         int count = dx <= start ? 0 : Math.min(20, 1 + (int) ((dx - start) / (36 * density)));
         if (count != p.wordDeleteCount) {
@@ -1384,8 +1472,10 @@ public final class KeyboardView extends View {
         }
         if (p.key.type == Key.Type.DELETE) {
             stopRepeat();
-            if (p.wordDelete && p.wordDeleteCount > 0 && listener != null) {
-                listener.onDeleteWords(p.wordDeleteCount);
+            if (p.wordDelete) {
+                if (p.wordDeleteCount > 0 && listener != null) listener.onDeleteWords(p.wordDeleteCount);
+            } else if (!p.deleteFired) {
+                emit(Key.CODE_DELETE);
             }
             return;
         }
@@ -1960,10 +2050,15 @@ public final class KeyboardView extends View {
     }
 
     private void startRepeat() {
+        startRepeat(null);
+    }
+
+    private void startRepeat(Pointer owner) {
         stopRepeat();
         repeatRunnable = new Runnable() {
             @Override
             public void run() {
+                if (owner != null) owner.deleteFired = true;
                 emit(Key.CODE_DELETE);
                 handler.postDelayed(this, REPEAT_INTERVAL_MS);
             }

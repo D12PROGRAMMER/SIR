@@ -138,6 +138,21 @@ public class AndroidSmokeTest {
     }
 
     @Test
+    public void accentColorsStayReadable() {
+        for (String[] a : Palette.ACCENTS) {
+            int accent = Palette.accentColor(a[0]);
+            for (Palette base : new Palette[] {Palette.DARK, Palette.LIGHT}) {
+                Palette p = base.withAccent(accent);
+                assertTrue(a[0] + " onAccent", Palette.contrast(p.onAccent, p.accent) >= 4.5);
+                if (!p.dark) {
+                    assertTrue(a[0] + " ink", Palette.contrast(p.accentInk, p.background) >= 4.5);
+                }
+            }
+        }
+        assertEquals(Palette.DARK, Palette.DARK.withAccent(Palette.accentColor("red")));
+    }
+
+    @Test
     public void settingsActivityBuilds() {
         SettingsActivity activity = Robolectric.buildActivity(SettingsActivity.class).setup().get();
         assertNotNull(activity.findViewById(android.R.id.content));

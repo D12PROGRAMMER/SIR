@@ -327,7 +327,21 @@ public final class InputLogic {
             composingStart = -1;
         }
         int key = steps < 0 ? KEYCODE_DPAD_LEFT : KEYCODE_DPAD_RIGHT;
-        for (int i = 0; i < Math.abs(steps); i++) editor.sendKey(key);
+        int count = Math.abs(steps);
+        if (config.mode != FieldConfig.Mode.RAW) {
+            // An arrow key at the start or end of the text is not consumed by the editor and
+            // moves focus to another view; send only as many as there are characters to pass.
+            boolean hasSelection = selStart >= 0 ? selStart != selEnd : hasSelectedText();
+            if (!hasSelection) {
+                CharSequence before = editor.getTextBeforeCursor(count * 8 + 64);
+                CharSequence after = editor.getTextAfterCursor(count * 8 + 64);
+                boolean backward = steps < 0;
+                if (isRtlParagraph(before, after)) backward = !backward;
+                CharSequence side = backward ? before : after;
+                if (side != null) count = Math.min(count, graphemeCount(side, backward, count));
+            }
+        }
+        for (int i = 0; i < count; i++) editor.sendKey(key);
         // The editor reports the new position through onUpdateSelection.
         selStart = selEnd = -1;
         notifyChanged();
@@ -357,7 +371,7 @@ public final class InputLogic {
         if (remaining > 0) {
             CharSequence before = editor.getTextBeforeCursor(WORD_LOOKBEHIND);
             if (before != null) {
-                int n = wordsBackLength(before, remaining);
+                int n = wordsBackLength(before, remaining, style == TextStyle.SPACED);
                 if (n > 0) {
                     editor.deleteSurroundingText(n, 0);
                     if (selStart >= 0) selStart = selEnd = Math.max(0, selStart - n);
@@ -369,16 +383,72 @@ public final class InputLogic {
 
     /** Length of the trailing {@code words} whitespace-separated words, with their spacing. */
     static int wordsBackLength(CharSequence text, int words) {
+        return wordsBackLength(text, words, false);
+    }
+
+    /**
+     * As above; with {@code spaced} (the SPACED style), a single space between two non-space
+     * characters is part of the word, since that style puts one between every letter.
+     */
+    static int wordsBackLength(CharSequence text, int words, boolean spaced) {
         int i = text.length();
         for (int w = 0; w < words && i > 0; w++) {
             while (i > 0 && Character.isWhitespace(Character.codePointBefore(text, i))) {
                 i -= Character.charCount(Character.codePointBefore(text, i));
             }
-            while (i > 0 && !Character.isWhitespace(Character.codePointBefore(text, i))) {
-                i -= Character.charCount(Character.codePointBefore(text, i));
+            while (i > 0) {
+                int cp = Character.codePointBefore(text, i);
+                if (Character.isWhitespace(cp)) {
+                    boolean innerSpace = spaced && cp == ' ' && i - 1 > 0 && i < text.length()
+                            && !Character.isWhitespace(Character.codePointBefore(text, i - 1))
+                            && !Character.isWhitespace(Character.codePointAt(text, i));
+                    if (!innerSpace) break;
+                }
+                i -= Character.charCount(cp);
             }
         }
         return text.length() - i;
+    }
+
+    /** Number of grapheme clusters at the near end of {@code side}, counting at most {@code max}. */
+    static int graphemeCount(CharSequence side, boolean beforeCursor, int max) {
+        String s = side.toString();
+        BreakIterator it = BreakIterator.getCharacterInstance();
+        it.setText(s);
+        int n = 0;
+        int pos = beforeCursor ? s.length() : 0;
+        while (n < max) {
+            int next = beforeCursor ? it.preceding(pos) : it.following(pos);
+            if (next == BreakIterator.DONE) break;
+            pos = next;
+            n++;
+        }
+        return n;
+    }
+
+    /** Whether the cursor's paragraph starts with a right-to-left strong character. */
+    static boolean isRtlParagraph(CharSequence before, CharSequence after) {
+        StringBuilder para = new StringBuilder();
+        if (before != null) {
+            String b = before.toString();
+            para.append(b.substring(b.lastIndexOf('\n') + 1));
+        }
+        if (after != null) {
+            String a = after.toString();
+            int nl = a.indexOf('\n');
+            para.append(nl < 0 ? a : a.substring(0, nl));
+        }
+        for (int i = 0; i < para.length(); ) {
+            int cp = para.codePointAt(i);
+            i += Character.charCount(cp);
+            byte d = Character.getDirectionality(cp);
+            if (d == Character.DIRECTIONALITY_LEFT_TO_RIGHT) return false;
+            if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT
+                    || d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Reverts the last slang substitution. Returns false if none is revertible. */

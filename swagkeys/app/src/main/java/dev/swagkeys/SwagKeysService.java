@@ -85,6 +85,7 @@ public final class SwagKeysService extends InputMethodService
         FieldConfig config = logic.config();
         keyboard.setRecentEmojis(prefs.recentEmojis());
         keyboard.setField(config.layout, config.enterKeyAction, config.enterLabel);
+        keyboard.setWordDeleteEnabled(config.mode != FieldConfig.Mode.RAW);
         onInputStateChanged();
     }
 
@@ -207,7 +208,9 @@ public final class SwagKeysService extends InputMethodService
     public void onKey(int code) {
         switch (code) {
             case Key.CODE_DELETE:
+                boolean hadUndo = logic.undoableWord() != null;
                 logic.onDelete();
+                if (hadUndo && keyboard != null) keyboard.cancelSlangAnimation();
                 break;
             case Key.CODE_ENTER:
                 logic.onEnter();
@@ -289,6 +292,7 @@ public final class SwagKeysService extends InputMethodService
     public void onSuggestionTap() {
         if (logic.undoableWord() != null) {
             logic.undoSlang();
+            if (keyboard != null) keyboard.cancelSlangAnimation();
         } else {
             logic.pickSlang();
         }
@@ -310,6 +314,12 @@ public final class SwagKeysService extends InputMethodService
         public CharSequence getTextBeforeCursor(int n) {
             InputConnection ic = getCurrentInputConnection();
             return ic == null ? null : ic.getTextBeforeCursor(n, 0);
+        }
+
+        @Override
+        public CharSequence getTextAfterCursor(int n) {
+            InputConnection ic = getCurrentInputConnection();
+            return ic == null ? null : ic.getTextAfterCursor(n, 0);
         }
 
         @Override

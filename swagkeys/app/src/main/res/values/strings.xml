@@ -15,7 +15,7 @@
     <string name="style_note">Applied as you type. Change it any time from the style chip on the keyboard. Passwords, e-mail, URLs and number fields are never styled.</string>
 
     <string name="slang_toggle">Auto-correct to swag slang</string>
-    <string name="slang_note">Dictionary entries: %1$d. In chat-style fields a listed word is replaced when you finish it (space, punctuation or enter); press delete right after, or tap UNDO in the strip, to restore what you typed. In search, name and address boxes the slang is only offered in the strip: tap it to apply. Words glued to other text (#tags, @names, web addresses) are left alone. The SWAG pill on the keyboard toggles this: solid red = automatic, red outline = strip only.</string>
+    <string name="slang_note">Dictionary entries: %1$d. In chat-style fields a listed word is replaced when you finish it (space, punctuation or enter); press delete right after, or tap UNDO in the strip, to restore what you typed. In search, name and address boxes the slang is only offered in the strip: tap it to apply. Words glued to other text (#tags, @names, web addresses) are left alone. The SWAG pill on the keyboard toggles this: solid pill = automatic, outlined pill = strip only.</string>
     <string name="show_dictionary">Show dictionary</string>
     <string name="hide_dictionary">Hide dictionary</string>
 
