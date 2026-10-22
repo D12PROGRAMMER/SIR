@@ -39,37 +39,58 @@ public final class EmojiData {
 
     private static final String ASSET = "emoji.txt";
 
-    private static List<Category> categories;
-    /** Base emoji -> base followed by its renderable skin-tone variants (only if any). */
-    private static Map<String, List<String>> variants;
+    /** Loaded data, published once; readers never block on a loader once it is set. */
+    private static final class Data {
+        final List<Category> categories;
+        /** Base emoji -> base followed by its renderable skin-tone variants (only if any). */
+        final Map<String, List<String>> variants;
+
+        Data(List<Category> categories, Map<String, List<String>> variants) {
+            this.categories = categories;
+            this.variants = variants;
+        }
+    }
+
+    private static volatile Data data;
 
     private EmojiData() {}
 
     /** Loads the data on a background thread so the first panel open does not stall. */
     public static void preload(Context context) {
         Context app = context.getApplicationContext();
+        // Normal priority: a low-priority thread would be throttled into the background cgroup
+        // while the UI thread might be waiting for the same data.
         Thread t = new Thread(() -> categories(app), "emoji-preload");
-        t.setPriority(Thread.MIN_PRIORITY);
         t.setDaemon(true);
         t.start();
     }
 
-    public static synchronized List<Category> categories(Context context) {
-        if (categories == null) load(context);
-        return categories;
+    public static List<Category> categories(Context context) {
+        return get(context).categories;
     }
 
     /**
      * The base emoji followed by its renderable skin-tone variants, or an empty list if it has
      * none.
      */
-    public static synchronized List<String> variantsOf(Context context, String base) {
-        if (variants == null) load(context);
-        List<String> v = variants.get(base);
+    public static List<String> variantsOf(Context context, String base) {
+        List<String> v = get(context).variants.get(base);
         return v == null ? Collections.emptyList() : v;
     }
 
-    private static void load(Context context) {
+    private static Data get(Context context) {
+        Data d = data;
+        if (d != null) return d;
+        // Computed without holding a lock; if two threads race, both results are identical and
+        // the first one published wins.
+        Data loaded = load(context);
+        synchronized (EmojiData.class) {
+            if (data == null) data = loaded;
+            return data;
+        }
+    }
+
+    private static Data load(Context context) {
         List<String[]> groups = new ArrayList<>();          // {id, icon}
         List<List<String>> bases = new ArrayList<>();
         Map<String, List<String>> tones = new HashMap<>();
@@ -119,8 +140,7 @@ public final class EmojiData {
             List<String> renderable = fontReportsGlyphs ? filter(e.getValue(), paint) : e.getValue();
             if (renderable.size() > 1) v.put(e.getKey(), Collections.unmodifiableList(renderable));
         }
-        categories = Collections.unmodifiableList(cats);
-        variants = v;
+        return new Data(Collections.unmodifiableList(cats), v);
     }
 
     private static List<String> filter(List<String> emojis, Paint paint) {

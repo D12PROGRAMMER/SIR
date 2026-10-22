@@ -546,6 +546,170 @@ public class KeyboardRenderTest {
         assertEquals(KeyboardLayouts.Mode.LETTERS, view.mode());
     }
 
+    /** Finds the visible grid node described as {@code description}, scrolling forward as needed. */
+    private int findEmojiVid(int tab, String description) {
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        provider.performAction(500 + tab, AccessibilityNodeInfo.ACTION_CLICK, null);
+        for (int i = 0; i < 20; i++) {
+            ShadowLooper.idleMainLooper(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+            view.computeScroll();
+        }
+        for (int page = 0; page < 40; page++) {
+            for (int vid = 100000; vid < 100000 + 4000; vid++) {
+                AccessibilityNodeInfo n = provider.createAccessibilityNodeInfo(vid);
+                if (n == null || !description.equals(String.valueOf(n.getContentDescription()))) continue;
+                android.graphics.Rect r = new android.graphics.Rect();
+                n.getBoundsInParent(r);
+                if (r.height() >= 20) return vid; // fully enough on screen to touch
+            }
+            provider.performAction(AccessibilityNodeProvider.HOST_VIEW_ID,
+                    AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null);
+        }
+        throw new AssertionError(description + " not found");
+    }
+
+    private float[] center(int vid) {
+        android.graphics.Rect r = new android.graphics.Rect();
+        view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(vid).getBoundsInParent(r);
+        return new float[] {r.exactCenterX(), r.exactCenterY()};
+    }
+
+    @Test
+    public void jitterDuringLongPressKeepsBase() {
+        tap(find(Key.CODE_EMOJI));
+        float[] c = center(findEmojiVid(1, "👋, more skin tones"));
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {c});
+        ShadowLooper.idleMainLooper(450, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertNotNull(view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(700));
+        float[][] jitter = {{c[0] + 3, c[1] - 2}};
+        touch(MotionEvent.ACTION_MOVE, 0, jitter);
+        touch(MotionEvent.ACTION_UP, 0, jitter);
+        assertEquals(List.of("👋"), emojis);
+    }
+
+    /** Scrolls the emoji grid by exactly {@code dy} pixels with a slow drag (no fling). */
+    private void scrollGridBy(float dy) {
+        int slop = android.view.ViewConfiguration.get(context).getScaledTouchSlop();
+        float x = view.getWidth() / 2f;
+        float y0 = find('a').bounds.centerY();
+        float dir = Math.signum(dy);
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y0}});
+        touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x, y0 - dir * (slop + 1)}});
+        touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x, y0 - dir * (slop + 1) - dy}});
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x, y0 - dir * (slop + 1) - dy}});
+        for (int k = 0; k < 20; k++) {
+            ShadowLooper.idleMainLooper(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+            view.computeScroll();
+        }
+    }
+
+    @Test
+    public void tallPickerOnUpperRowIsTapToChooseOtherwiseSlide() throws IOException {
+        tap(find(Key.CODE_EMOJI));
+        int vid = findEmojiVid(1, "🤝, more skin tones");
+        float density = context.getResources().getDisplayMetrics().density;
+        float target = find('q').bounds.top + 30 * density; // first grid row
+        for (int i = 0; i < 5 && Math.abs(center(vid)[1] - target) > 2; i++) {
+            scrollGridBy(center(vid)[1] - target);
+        }
+        float[] c = center(vid);
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {c});
+        ShadowLooper.idleMainLooper(450, java.util.concurrent.TimeUnit.MILLISECONDS);
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        int n = 0;
+        while (provider.createAccessibilityNodeInfo(700 + n) != null) n++;
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {c});
+        if (n > 6) {
+            // Pair picker (base + 25) is taller than the space above: it covers the finger.
+            assertTrue("emitted " + emojis, emojis.isEmpty());
+            shot("11_pair_tones");
+            AccessibilityNodeInfo pick = provider.createAccessibilityNodeInfo(700 + n - 1);
+            float[] t = center(700 + n - 1);
+            touch(MotionEvent.ACTION_DOWN, 0, new float[][] {t});
+            touch(MotionEvent.ACTION_UP, 0, new float[][] {t});
+            assertEquals(List.of(pick.getContentDescription().toString()), emojis);
+        } else {
+            // This font has only single-tone variants: the row fits above, release keeps base.
+            assertEquals(6, n);
+            assertEquals(List.of("🤝"), emojis);
+        }
+    }
+
+    @Test
+    public void screenReaderPassThroughLongPressIsTapToChoose() throws IOException {
+        tap(find(Key.CODE_EMOJI));
+        float[] c = center(findEmojiVid(1, "👍, more skin tones"));
+        AccessibilityManager am = (AccessibilityManager)
+                context.getSystemService(Context.ACCESSIBILITY_SERVICE);
+        ShadowAccessibilityManager sam = Shadow.extract(am);
+        sam.setEnabled(true);
+        sam.setTouchExplorationEnabled(true);
+        // Double-tap-and-hold is delivered as a real touch long press.
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {c});
+        ShadowLooper.idleMainLooper(450, java.util.concurrent.TimeUnit.MILLISECONDS);
+        touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{c[0] + 80, c[1] - 80}});
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{c[0] + 80, c[1] - 80}});
+        assertTrue("emitted " + emojis, emojis.isEmpty());
+        AccessibilityNodeInfo tone = view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(703);
+        assertNotNull(tone);
+        shot("11_tap_to_choose");
+        float[] t = center(703);
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {t});
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {t});
+        assertEquals(List.of(tone.getContentDescription().toString()), emojis);
+        assertTrue(view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(700) == null);
+    }
+
+    @Test
+    public void slidingToNeighbourCancelsLongPress() {
+        tap(find(Key.CODE_EMOJI));
+        float[] c = center(findEmojiVid(1, "👋, more skin tones"));
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {c});
+        float[][] next = {{c[0] + 60 * context.getResources().getDisplayMetrics().density, c[1]}};
+        touch(MotionEvent.ACTION_MOVE, 0, next);
+        ShadowLooper.idleMainLooper(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertTrue(view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(700) == null);
+        touch(MotionEvent.ACTION_UP, 0, next);
+        assertTrue(emojis.isEmpty());
+    }
+
+    @Test
+    public void otherAccessibilityActionsCloseStickyPicker() {
+        tap(find(Key.CODE_EMOJI));
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        int vid = findEmojiVid(1, "👍, more skin tones");
+        assertTrue(provider.performAction(vid, AccessibilityNodeInfo.ACTION_LONG_CLICK, null));
+        assertNotNull(provider.createAccessibilityNodeInfo(700));
+        assertTrue(provider.performAction(700, AccessibilityNodeInfo.ACTION_DISMISS, null));
+        assertTrue(provider.createAccessibilityNodeInfo(700) == null);
+        assertTrue(provider.performAction(vid, AccessibilityNodeInfo.ACTION_LONG_CLICK, null));
+        provider.performAction(AccessibilityNodeProvider.HOST_VIEW_ID,
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null);
+        assertTrue(provider.createAccessibilityNodeInfo(700) == null);
+        assertTrue(emojis.isEmpty());
+    }
+
+    @Test
+    public void hoverDwellOpensPickerWithoutTyping() {
+        AccessibilityManager am = (AccessibilityManager)
+                context.getSystemService(Context.ACCESSIBILITY_SERVICE);
+        ShadowAccessibilityManager sam = Shadow.extract(am);
+        tap(find(Key.CODE_EMOJI));
+        float[] c = center(findEmojiVid(1, "👋, more skin tones"));
+        sam.setEnabled(true);
+        sam.setTouchExplorationEnabled(true);
+        hover(MotionEvent.ACTION_HOVER_ENTER, c[0], c[1]);
+        ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertNotNull(view.getAccessibilityNodeProvider().createAccessibilityNodeInfo(700));
+        hover(MotionEvent.ACTION_HOVER_EXIT, c[0], c[1]);
+        assertTrue(emojis.isEmpty());
+        // The picker stays; exploring a tone and lifting types it.
+        float[] t = center(701);
+        hover(MotionEvent.ACTION_HOVER_ENTER, t[0], t[1]);
+        hover(MotionEvent.ACTION_HOVER_EXIT, t[0], t[1]);
+        assertEquals(List.of("👋🏻"), emojis);
+    }
+
     @Test
     public void swagPillToggles() {
         int w = view.getWidth();

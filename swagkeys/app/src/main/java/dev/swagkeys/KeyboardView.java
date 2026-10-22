@@ -107,6 +107,8 @@ public final class KeyboardView extends View {
         /** Long-press code point shown in the preview after a long press fired, else 0. */
         int longPressShown;
         Runnable longPress;
+        float lastX;
+        float lastY;
 
         Pointer(int id) {
             this.id = id;
@@ -202,6 +204,16 @@ public final class KeyboardView extends View {
     /** Opened by an accessibility long click: stays open until a variant is chosen or dismissed. */
     private boolean emojiPopupSticky;
     private Runnable emojiLongPress;
+    /** Bottom of the long-pressed cell; slide selection accepts fingers down to here. */
+    private float emojiPopupAnchorBottom;
+    /** Finger position when the popup opened; selection follows only after it moves past slop. */
+    private float emojiPopupDownX;
+    private float emojiPopupDownY;
+    private boolean emojiPopupTracking;
+    /** Opens the tone popup after hovering a toneable cell (touch exploration). */
+    private Runnable hoverDwell;
+    /** The hover gesture opened the popup: its lift must not type the hovered emoji. */
+    private boolean hoverOpenedPopup;
 
     // Touch
     private final SparseArray<Pointer> pointers = new SparseArray<>();
@@ -1003,11 +1015,22 @@ public final class KeyboardView extends View {
             return;
         }
         if (p.region == REGION_EMOJI && p.consumed) {
-            // Finger held after the skin-tone popup opened: slide to choose.
-            if (emojiPopup != null) emojiPopupSelected = emojiPopupIndexAt(x, y, true);
+            // Finger held after the skin-tone popup opened: slide to choose. A sticky popup is
+            // chosen by tapping after the finger lifts.
+            if (emojiPopup == null || emojiPopupSticky) return;
+            if (!emojiPopupTracking) {
+                if (Math.hypot(x - emojiPopupDownX, y - emojiPopupDownY) <= touchSlop) return;
+                emojiPopupTracking = true;
+            }
+            emojiPopupSelected = emojiPopupIndexAt(x, y, true);
             return;
         }
         if (p.region == REGION_EMOJI) {
+            p.lastX = x;
+            p.lastY = y;
+            if (emojiLongPress != null && emojiCellAt(panelX(x), panelY(y)) != p.tile) {
+                cancelEmojiLongPress();
+            }
             if (!emojiDragging && Math.abs(y - emojiDownY) > touchSlop) {
                 emojiDragging = true;
                 emojiLastY = y;
@@ -1272,6 +1295,7 @@ public final class KeyboardView extends View {
     }
 
     private void scrollToEmojiTab(int tab) {
+        closeEmojiPopup();
         float target = Math.min(maxEmojiScroll(), emojiTabRows.get(tab) * emojiCellH);
         emojiScroller.forceFinished(true);
         emojiScroller.startScroll(0, Math.round(emojiScrollY), 0,
@@ -1310,6 +1334,8 @@ public final class KeyboardView extends View {
             emojiPopupSelected = i;
         } else if (emojiGridRect.contains(x, y)) {
             p.region = REGION_EMOJI;
+            p.lastX = x;
+            p.lastY = y;
             // A touch that stops a running fling or tab scroll only stops it; it does not type.
             boolean caught = !emojiScroller.isFinished();
             emojiScroller.forceFinished(true);
@@ -1358,7 +1384,12 @@ public final class KeyboardView extends View {
                 }
                 break;
             case REGION_EMOJI:
-                if (p.consumed) {
+                if (p.consumed && emojiPopupSticky) {
+                    // The popup covers the finger or a screen reader is active: keep it open
+                    // and let the user tap (or double-tap) a variant.
+                    emojiPopupSelected = -1;
+                    invalidate();
+                } else if (p.consumed) {
                     String chosen = emojiPopup != null && emojiPopupSelected >= 0
                             ? emojiPopup.get(emojiPopupSelected) : null;
                     closeEmojiPopup();
@@ -1402,10 +1433,12 @@ public final class KeyboardView extends View {
         emojiLongPress = () -> {
             emojiLongPress = null;
             if (pointers.get(p.id) != p || emojiDragging || p.tile < 0) return;
-            if (openEmojiPopup(p.tile, false)) {
+            if (openEmojiPopup(p.tile, touchExploring(), p.lastX, p.lastY)) {
                 p.consumed = true;
+                emojiPopupDownX = p.lastX;
+                emojiPopupDownY = p.lastY;
+                emojiPopupTracking = false;
                 feedback(0);
-                invalidate();
             }
         };
         handler.postDelayed(emojiLongPress, EMOJI_LONG_PRESS_MS);
@@ -1420,6 +1453,14 @@ public final class KeyboardView extends View {
 
     /** Opens the skin-tone popup over grid cell {@code idx}; false if it has no variants. */
     private boolean openEmojiPopup(int idx, boolean sticky) {
+        return openEmojiPopup(idx, sticky, Float.NaN, Float.NaN);
+    }
+
+    /**
+     * Opens the skin-tone popup over grid cell {@code idx}; false if it has no variants. With a
+     * finger position, a popup that covers the finger becomes tap-to-choose.
+     */
+    private boolean openEmojiPopup(int idx, boolean sticky, float fingerX, float fingerY) {
         List<String> v = EmojiData.variantsOf(getContext(), emojiCells.get(idx));
         if (v.size() < 2) return false;
         emojiPopup = v;
@@ -1434,15 +1475,30 @@ public final class KeyboardView extends View {
         float h = popupRows * emojiPopupCell;
         float cellLeft = emojiGridRect.left + (idx % emojiCols) * emojiCellW;
         float cellTop = emojiGridRect.top + (idx / emojiCols) * emojiCellH - emojiScrollY;
-        float left = Math.max(padH, Math.min(getWidth() - padH - w, cellLeft + emojiCellW / 2f - w / 2f));
+        // The base (index 0) sits directly above the pressed cell where the width allows.
+        float left = Math.max(padH, Math.min(getWidth() - padH - w,
+                cellLeft + (emojiCellW - emojiPopupCell) / 2f));
         float top = Math.max(0f, Math.min(getHeight() - h, cellTop - h - 4 * density));
         emojiPopupRect.set(left, top, left + w, top + h);
+        emojiPopupAnchorBottom = cellTop + emojiCellH;
+        // A popup over the finger (tall multi-person pickers on upper rows) cannot be
+        // slide-selected without hiding choices under the finger: tap to choose instead.
+        if (!Float.isNaN(fingerX) && emojiPopupRect.contains(fingerX, fingerY)) {
+            emojiPopupSticky = true;
+            emojiPopupSelected = -1;
+        }
         notifyA11yLayoutChanged();
+        if (sticky) {
+            a11yFocusedVid = VID_EMOJI_POPUP;
+            sendA11yEvent(VID_EMOJI_POPUP, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+        }
+        invalidate();
         return true;
     }
 
     private void closeEmojiPopup() {
         cancelEmojiLongPress();
+        emojiPopupTracking = false;
         if (emojiPopup == null) return;
         emojiPopup = null;
         emojiPopupSticky = false;
@@ -1464,8 +1520,10 @@ public final class KeyboardView extends View {
     private int emojiPopupIndexAt(float x, float y, boolean nearest) {
         if (emojiPopup == null) return -1;
         float slack = nearest ? emojiPopupCell : 0f;
+        float bottom = nearest ? Math.max(emojiPopupRect.bottom + slack, emojiPopupAnchorBottom)
+                : emojiPopupRect.bottom;
         if (x < emojiPopupRect.left - slack || x >= emojiPopupRect.right + slack
-                || y < emojiPopupRect.top - slack || y >= emojiPopupRect.bottom + slack) {
+                || y < emojiPopupRect.top - slack || y >= bottom) {
             return -1;
         }
         int rowsN = (emojiPopup.size() + emojiPopupCols - 1) / emojiPopupCols;
@@ -1660,9 +1718,9 @@ public final class KeyboardView extends View {
 
     private int virtualIdAt(float x, float y) {
         if (y >= keysBottom()) return VID_NONE;
-        if (emojiPanelOpen) {
+        if (emojiPanelOpen && emojiPopup != null && emojiPopupRect.contains(x, y)) {
             int pi = emojiPopupIndexAt(x, y, false);
-            if (pi >= 0) return VID_EMOJI_POPUP + pi;
+            return pi < 0 ? VID_NONE : VID_EMOJI_POPUP + pi;
         }
         if (y < keysTop) {
             int region = stripRegionAt(x, y);
@@ -1810,6 +1868,7 @@ public final class KeyboardView extends View {
 
     private void clickVid(int vid) {
         if (!isValidVid(vid)) return;
+        if (emojiPopup != null && !(vid >= VID_EMOJI_POPUP && vid < VID_KEY)) closeEmojiPopup();
         if (vid >= VID_EMOJI) {
             feedback(0);
             emitEmoji(emojiCells.get(vid - VID_EMOJI));
@@ -1842,7 +1901,10 @@ public final class KeyboardView extends View {
     }
 
     private boolean longClickVid(int vid) {
-        if (vid >= VID_EMOJI && isValidVid(vid)) return openEmojiPopup(vid - VID_EMOJI, true);
+        if (vid >= VID_EMOJI && isValidVid(vid)) {
+            closeEmojiPopup();
+            return openEmojiPopup(vid - VID_EMOJI, true);
+        }
         Key k = keyForVid(vid);
         if (k == null) return false;
         if (k.type == Key.Type.SPACE) {
@@ -1871,8 +1933,10 @@ public final class KeyboardView extends View {
                 setHoveredVid(vid);
                 break;
             case MotionEvent.ACTION_HOVER_EXIT:
-                // Lift-to-type: releasing the finger over the explored control activates it.
-                if (vid != VID_NONE && vid == hoveredVid) clickVid(vid);
+                // Lift-to-type: releasing the finger over the explored control activates it,
+                // unless dwelling on it opened the skin-tone picker.
+                if (vid != VID_NONE && vid == hoveredVid && !hoverOpenedPopup) clickVid(vid);
+                hoverOpenedPopup = false;
                 setHoveredVid(VID_NONE);
                 break;
             default:
@@ -1885,6 +1949,22 @@ public final class KeyboardView extends View {
         if (vid == hoveredVid) return;
         int old = hoveredVid;
         hoveredVid = vid;
+        if (hoverDwell != null) {
+            handler.removeCallbacks(hoverDwell);
+            hoverDwell = null;
+        }
+        if (vid >= VID_EMOJI && isValidVid(vid) && emojiPopup == null
+                && EmojiData.variantsOf(getContext(), emojiCells.get(vid - VID_EMOJI)).size() > 1) {
+            hoverDwell = () -> {
+                hoverDwell = null;
+                if (hoveredVid == vid && isValidVid(vid) && openEmojiPopup(vid - VID_EMOJI, true)) {
+                    hoverOpenedPopup = true;
+                    feedback(0);
+                }
+            };
+            handler.postDelayed(hoverDwell, Math.max(2 * EMOJI_LONG_PRESS_MS,
+                    ViewConfiguration.getLongPressTimeout()));
+        }
         if (old != VID_NONE) sendA11yEvent(old, AccessibilityEvent.TYPE_VIEW_HOVER_EXIT);
         if (vid != VID_NONE) sendA11yEvent(vid, AccessibilityEvent.TYPE_VIEW_HOVER_ENTER);
     }
@@ -2002,6 +2082,10 @@ public final class KeyboardView extends View {
                 info.setLongClickable(true);
                 info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK);
             }
+            if (vid >= VID_EMOJI_POPUP && vid < VID_KEY) {
+                info.setDismissable(true);
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS);
+            }
             if (vid == a11yFocusedVid) {
                 info.setAccessibilityFocused(true);
                 info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS);
@@ -2016,6 +2100,7 @@ public final class KeyboardView extends View {
             if (vid == HOST_VIEW_ID) {
                 if (emojiPanelOpen && (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                         || action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
+                    closeEmojiPopup();
                     float page = Math.max(emojiCellH, emojiGridRect.height() - emojiCellH);
                     float before = emojiScrollY;
                     emojiScroller.forceFinished(true);
@@ -2045,6 +2130,10 @@ public final class KeyboardView extends View {
                     return true;
                 case AccessibilityNodeInfo.ACTION_LONG_CLICK:
                     return longClickVid(vid);
+                case AccessibilityNodeInfo.ACTION_DISMISS:
+                    if (emojiPopup == null || vid < VID_EMOJI_POPUP || vid >= VID_KEY) return false;
+                    closeEmojiPopup();
+                    return true;
                 default:
                     return false;
             }
