@@ -30,6 +30,9 @@ public interface Editor {
     /** See {@link android.view.inputmethod.InputConnection#getCursorCapsMode(int)}. */
     int getCursorCapsMode(int reqModes);
 
+    /** {@link android.text.TextUtils#getCapsMode} evaluated at the end of {@code text}. */
+    int capsModeOf(CharSequence text, int reqModes);
+
     void performEditorAction(int actionId);
 
     void beginBatchEdit();

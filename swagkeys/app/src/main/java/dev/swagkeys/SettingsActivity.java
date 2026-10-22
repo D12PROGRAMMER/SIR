@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Typeface;
@@ -24,6 +25,7 @@ import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
@@ -40,7 +42,10 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.EnumMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** Setup and preferences screen, also the launcher activity. Built in code to apply the dot font. */
 public final class SettingsActivity extends Activity {
@@ -57,8 +62,23 @@ public final class SettingsActivity extends Activity {
     private TextView enabledStatus;
     private TextView selectedStatus;
     private TextView fontStatus;
+    private RadioGroup fontGroup;
     private RadioButton fontDoto;
     private RadioButton fontCustom;
+    /** Set while refreshFontControls updates the group, so its listener ignores the change. */
+    private boolean updatingFonts;
+    private final EnumMap<TextStyle, RadioButton> styleButtons = new EnumMap<>(TextStyle.class);
+    private Switch slangSwitch;
+
+    /** Background thread for font import I/O (content providers may block while downloading). */
+    private static final ExecutorService IO = Executors.newSingleThreadExecutor();
+
+    // Held in a field: SharedPreferences keeps listeners in a WeakHashMap.
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefSync = (sp, key) -> {
+        if (key == null || Prefs.KEY_STYLE.equals(key) || Prefs.KEY_SLANG.equals(key)) {
+            syncFromPrefs();
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -71,6 +91,23 @@ public final class SettingsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshStatus();
+        syncFromPrefs();
+        prefs.raw().registerOnSharedPreferenceChangeListener(prefSync);
+    }
+
+    @Override
+    protected void onPause() {
+        prefs.raw().unregisterOnSharedPreferenceChangeListener(prefSync);
+        super.onPause();
+    }
+
+    /** Reflects style and slang changes made from the keyboard (style chip, SWAG pill). */
+    private void syncFromPrefs() {
+        if (slangSwitch == null) return;
+        RadioButton rb = styleButtons.get(prefs.style());
+        if (rb != null && !rb.isChecked()) rb.setChecked(true);
+        boolean slang = prefs.slang();
+        if (slangSwitch.isChecked() != slang) slangSwitch.setChecked(slang);
     }
 
     @Override
@@ -99,21 +136,13 @@ public final class SettingsActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
         scroll.addView(root, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        scroll.setOnApplyWindowInsetsListener((v, insets) -> {
-            int top;
-            int bottom;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                android.graphics.Insets bars = insets.getInsets(
-                        WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
-                top = bars.top;
-                bottom = bars.bottom;
-            } else {
-                top = insets.getSystemWindowInsetTop();
-                bottom = insets.getSystemWindowInsetBottom();
-            }
-            v.setPadding(0, top, 0, bottom);
-            return insets;
-        });
+        // Insets are applied to a wrapper so the ScrollView itself shrinks when the IME opens
+        // (API 35+ edge-to-edge); ScrollView then keeps the focused field in view.
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackgroundColor(palette.background);
+        frame.addView(scroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        frame.setOnApplyWindowInsetsListener(SettingsActivity::applyInsets);
 
         TextView title = text(getString(R.string.app_name).toUpperCase(java.util.Locale.ROOT), 44, palette.text);
         title.setTypeface(headFont);
@@ -144,6 +173,7 @@ public final class SettingsActivity extends Activity {
             RadioButton rb = radio(s.label + "   " + s.apply(SAMPLE));
             rb.setId(View.generateViewId());
             rb.setTag(s);
+            styleButtons.put(s, rb);
             styles.addView(rb);
             if (s == current) rb.setChecked(true);
         }
@@ -155,8 +185,9 @@ public final class SettingsActivity extends Activity {
 
         // Slang
         root.addView(header("03  SWAG SLANG"));
-        root.addView(toggle(getString(R.string.slang_toggle), prefs.slang(),
-                (b, on) -> prefs.setSlang(on)));
+        slangSwitch = toggle(getString(R.string.slang_toggle), prefs.slang(),
+                (b, on) -> prefs.setSlang(on));
+        root.addView(slangSwitch);
         root.addView(note(getString(R.string.slang_note, SlangDictionary.entries().size())));
         TextView dict = text(dictionaryText(), 14, palette.textSecondary);
         dict.setTypeface(Typeface.MONOSPACE);
@@ -197,6 +228,7 @@ public final class SettingsActivity extends Activity {
         root.addView(header("05  FONT"));
         root.addView(note(getString(R.string.font_note)));
         RadioGroup fonts = new RadioGroup(this);
+        fontGroup = fonts;
         fontDoto = radio(getString(R.string.font_doto));
         fontDoto.setId(View.generateViewId());
         fontCustom = radio(getString(R.string.font_custom));
@@ -209,12 +241,13 @@ public final class SettingsActivity extends Activity {
         root.addView(button(getString(R.string.import_font), v -> pickFont()));
         refreshFontControls();
         fonts.setOnCheckedChangeListener((group, id) -> {
+            if (updatingFonts) return;
             if (id == fontDoto.getId()) {
                 prefs.setFont(Prefs.FONT_DOTO);
             } else if (id == fontCustom.getId()) {
                 if (Fonts.load(Fonts.customFontFile(this)) == null) {
                     Toast.makeText(this, R.string.font_none_imported, Toast.LENGTH_SHORT).show();
-                    fontDoto.setChecked(true);
+                    refreshFontControls();
                     return;
                 }
                 prefs.setFont(Prefs.FONT_CUSTOM);
@@ -254,7 +287,20 @@ public final class SettingsActivity extends Activity {
         }));
         root.addView(ofl);
 
-        setContentView(scroll);
+        setContentView(frame);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static WindowInsets applyInsets(View v, WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.graphics.Insets i = insets.getInsets(WindowInsets.Type.systemBars()
+                    | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+            v.setPadding(i.left, i.top, i.right, i.bottom);
+            return WindowInsets.CONSUMED;
+        }
+        v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+        return insets.consumeSystemWindowInsets();
     }
 
     @SuppressWarnings("deprecation")
@@ -425,8 +471,12 @@ public final class SettingsActivity extends Activity {
     private void refreshFontControls() {
         boolean haveCustom = Fonts.load(Fonts.customFontFile(this)) != null;
         boolean useCustom = haveCustom && Prefs.FONT_CUSTOM.equals(prefs.font());
-        fontDoto.setChecked(!useCustom);
-        fontCustom.setChecked(useCustom);
+        updatingFonts = true;
+        try {
+            fontGroup.check(useCustom ? fontCustom.getId() : fontDoto.getId());
+        } finally {
+            updatingFonts = false;
+        }
         String name = prefs.fontName();
         fontStatus.setText(haveCustom
                 ? getString(R.string.font_imported, name == null ? Fonts.CUSTOM_FONT_FILE : name)
@@ -459,23 +509,34 @@ public final class SettingsActivity extends Activity {
         Uri uri = data.getData();
         File target = Fonts.customFontFile(this);
         File temp = new File(getFilesDir(), Fonts.CUSTOM_FONT_FILE + ".tmp");
-        try {
-            copyLimited(uri, temp);
-            if (Fonts.load(temp) == null) {
-                Toast.makeText(this, R.string.font_invalid, Toast.LENGTH_LONG).show();
-                return;
+        IO.execute(() -> {
+            String message;
+            String importedName = null;
+            try {
+                copyLimited(uri, temp);
+                if (Fonts.load(temp) == null) {
+                    message = getString(R.string.font_invalid);
+                } else if (!temp.renameTo(target)) {
+                    throw new IOException("rename failed");
+                } else {
+                    importedName = displayName(uri);
+                    message = getString(R.string.font_import_ok);
+                }
+            } catch (IOException | SecurityException e) {
+                message = getString(R.string.font_import_failed, e.getMessage());
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                temp.delete();
             }
-            if (!temp.renameTo(target)) throw new IOException("rename failed");
-            prefs.onCustomFontImported(displayName(uri));
-            Toast.makeText(this, R.string.font_import_ok, Toast.LENGTH_SHORT).show();
-        } catch (IOException | SecurityException e) {
-            Toast.makeText(this, getString(R.string.font_import_failed, e.getMessage()),
-                    Toast.LENGTH_LONG).show();
-        } finally {
-            //noinspection ResultOfMethodCallIgnored
-            temp.delete();
-            refreshFontControls();
-        }
+            String toast = message;
+            String name = importedName;
+            runOnUiThread(() -> {
+                if (name != null) prefs.onCustomFontImported(name);
+                if (isDestroyed()) return;
+                Toast.makeText(this, toast, Toast.LENGTH_LONG).show();
+                refreshFontControls();
+            });
+        });
     }
 
     private void copyLimited(Uri uri, File dest) throws IOException {

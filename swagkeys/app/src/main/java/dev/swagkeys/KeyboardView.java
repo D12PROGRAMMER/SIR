@@ -7,11 +7,13 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.media.AudioManager;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -21,7 +23,12 @@ import android.util.SparseArray;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewParent;
 import android.view.WindowInsets;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.EditorInfo;
 
 import java.util.List;
@@ -49,11 +56,17 @@ public final class KeyboardView extends View {
 
     public enum Shift { OFF, ON, LOCKED }
 
+    /** Slang indicator states for {@link #setStripState}. */
+    public static final int SLANG_OFF = 0;
+    public static final int SLANG_SUGGEST = 1;
+    public static final int SLANG_AUTO = 2;
+
     private static final long LONG_PRESS_MS = 350;
     private static final long LONG_PRESS_FUNCTION_MS = 500;
     private static final long REPEAT_START_MS = 400;
     private static final long REPEAT_INTERVAL_MS = 50;
     private static final long DOUBLE_TAP_MS = 350;
+    private static final long NO_TAP = -1;
 
     private static final int REGION_NONE = 0;
     private static final int REGION_KEY = 1;
@@ -94,7 +107,8 @@ public final class KeyboardView extends View {
     private TextStyle style = TextStyle.NORMAL;
     private boolean stylesActive = true;
     private boolean slangOn = true;
-    private boolean slangActive = true;
+    /** SLANG_OFF: not applicable here; SLANG_SUGGEST: strip only; SLANG_AUTO: automatic. */
+    private int slangMode = SLANG_AUTO;
     private String pendingSlang;
     private String undoWord;
     private boolean stylePanelOpen;
@@ -104,6 +118,7 @@ public final class KeyboardView extends View {
     private FieldConfig.Layout fieldLayout = FieldConfig.Layout.TEXT;
     private boolean showGlobe;
     private int enterAction = EditorInfo.IME_ACTION_NONE;
+    private String enterLabel;
     private List<KeyboardLayouts.Row> rows;
     private boolean typedInSymbols;
 
@@ -111,7 +126,8 @@ public final class KeyboardView extends View {
     private Shift shift = Shift.OFF;
     private boolean shiftAuto;
     private boolean autoCapsWanted;
-    private long lastShiftTapTime;
+    /** Time of the last shift tap that may start a double tap, or NO_TAP. */
+    private long lastShiftTapTime = NO_TAP;
     private int shiftPointerId = -1;
     private boolean shiftChordTyped;
 
@@ -161,7 +177,11 @@ public final class KeyboardView extends View {
         setOnApplyWindowInsetsListener((v, insets) -> {
             int bottom;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+                // On API 35+ the IME window is edge-to-edge; with gesture navigation the nav bar
+                // frame drawn by InputMethodService is reported as a captionBar inset that is
+                // taller than navigationBars. Below 35 DecorView consumes both (inset is 0).
+                bottom = insets.getInsets(WindowInsets.Type.navigationBars()
+                        | WindowInsets.Type.captionBar()).bottom;
             } else {
                 bottom = insets.getSystemWindowInsetBottom();
             }
@@ -203,10 +223,12 @@ public final class KeyboardView extends View {
     }
 
     /** Configures the layout for a newly focused field. */
-    public void setField(FieldConfig.Layout layout, int enterAction, boolean showGlobe) {
+    public void setField(FieldConfig.Layout layout, int enterAction, String enterLabel,
+            boolean showGlobe) {
         cancelAllPointers();
         this.fieldLayout = layout;
         this.enterAction = enterAction;
+        this.enterLabel = enterLabel;
         this.showGlobe = showGlobe;
         this.mode = layout == FieldConfig.Layout.TEXT
                 ? KeyboardLayouts.Mode.LETTERS : KeyboardLayouts.Mode.NUMPAD;
@@ -217,14 +239,15 @@ public final class KeyboardView extends View {
         rebuildLayout();
         applyAutoCaps();
         invalidate();
+        notifyA11yLayoutChanged();
     }
 
     public void setStripState(TextStyle style, boolean stylesActive, boolean slangOn,
-            boolean slangActive, String pendingSlang, String undoWord) {
+            int slangMode, String pendingSlang, String undoWord) {
         this.style = style;
         this.stylesActive = stylesActive;
         this.slangOn = slangOn;
-        this.slangActive = slangActive;
+        this.slangMode = slangMode;
         this.pendingSlang = pendingSlang;
         this.undoWord = undoWord;
         invalidate();
@@ -296,11 +319,15 @@ public final class KeyboardView extends View {
     }
 
     private void rebuildLayout() {
-        rows = KeyboardLayouts.build(mode, fieldLayout, showGlobe, enterKeyFor(enterAction));
+        rows = KeyboardLayouts.build(mode, fieldLayout, showGlobe, enterKeyFor(enterAction, enterLabel));
         computeGeometry();
     }
 
-    static Key enterKeyFor(int action) {
+    static Key enterKeyFor(int action, String customLabel) {
+        if (customLabel != null && !customLabel.trim().isEmpty()) {
+            String label = customLabel.trim().toUpperCase(java.util.Locale.getDefault());
+            return Key.fn(Key.CODE_ENTER, label, null, 1.5f, Key.Type.ENTER);
+        }
         switch (action) {
             case EditorInfo.IME_ACTION_GO:
                 return Key.fn(Key.CODE_ENTER, "GO", null, 1.5f, Key.Type.ENTER);
@@ -447,21 +474,23 @@ public final class KeyboardView extends View {
 
         // SWAG toggle
         boolean swagPressed = isRegionPressed(REGION_SWAG);
-        if (slangOn && slangActive) {
+        if (slangOn && slangMode == SLANG_AUTO) {
             fill.setColor(swagPressed ? palette.keyPressed : palette.accent);
             canvas.drawRoundRect(swagRect, pillRadius, pillRadius, fill);
             text.setColor(palette.onAccent);
         } else {
+            // Suggest-only fields: red outline; disabled or not applicable: grey outline.
+            boolean suggestOnly = slangOn && slangMode == SLANG_SUGGEST;
             fill.setColor(swagPressed ? palette.keyPressed : palette.key);
             canvas.drawRoundRect(swagRect, pillRadius, pillRadius, fill);
-            stroke.setColor(palette.outline);
+            stroke.setColor(suggestOnly ? palette.accent : palette.outline);
             canvas.drawRoundRect(swagRect, pillRadius, pillRadius, stroke);
-            text.setColor(palette.textSecondary);
+            text.setColor(suggestOnly ? palette.accent : palette.textSecondary);
         }
         text.setTextAlign(Paint.Align.CENTER);
         text.setTextSize(swagRect.height() * 0.52f);
         canvas.drawText("SWAG", swagRect.centerX(), baseline(swagRect.centerY()), text);
-        if (slangOn && !slangActive) {
+        if (slangOn && slangMode == SLANG_OFF) {
             // Enabled but not applicable to this field: strike through.
             fill.setColor(palette.textSecondary);
             canvas.drawRect(swagRect.left + 8 * density, swagRect.centerY() - 0.75f * density,
@@ -678,6 +707,11 @@ public final class KeyboardView extends View {
         return -1;
     }
 
+    /** Bottom of the key area; below it lies padding and the navigation-bar inset band. */
+    private float keysBottom() {
+        return keysTop + (rows == null ? 0 : rows.size()) * rowHeight + padBottom;
+    }
+
     /** Key in the row under y nearest to x; rows' gaps and side margins map to the nearest key. */
     Key keyAt(float x, float y) {
         if (rows == null || rows.isEmpty() || y < keysTop) return null;
@@ -696,6 +730,7 @@ public final class KeyboardView extends View {
     }
 
     private void onPointerDown(int id, float x, float y) {
+        if (y >= keysBottom()) return;
         if (y < keysTop || stylePanelOpen) {
             // Strip and style panel accept a single pointer at a time.
             if (pointers.size() > 0) return;
@@ -716,13 +751,27 @@ public final class KeyboardView extends View {
         Key key = keyAt(x, y);
         if (key == null) return;
 
-        // Roll-over: a new touch commits a character key still held by another finger.
+        if (key.type != Key.Type.DELETE) stopRepeat();
+        if (key.type != Key.Type.SHIFT) {
+            lastShiftTapTime = NO_TAP;
+            // A chord (shift held while typing) must not turn into caps lock.
+            Pointer sp = shiftPointerId >= 0 ? pointers.get(shiftPointerId) : null;
+            if (sp != null) cancelLongPress(sp);
+        }
+
+        // Roll-over: a new touch commits a character or space key still held by another
+        // finger, so output order follows press order.
         for (int i = 0; i < pointers.size(); i++) {
             Pointer other = pointers.valueAt(i);
-            if (other.region == REGION_KEY && !other.consumed && other.key.type == Key.Type.CHAR) {
+            if (other.region != REGION_KEY || other.consumed) continue;
+            if (other.key.type == Key.Type.CHAR) {
                 cancelLongPress(other);
                 other.consumed = true;
                 emitChar(other.key, displayCode(other.key));
+            } else if (other.key.type == Key.Type.SPACE) {
+                cancelLongPress(other);
+                other.consumed = true;
+                emit(Key.CODE_SPACE);
             }
         }
 
@@ -781,9 +830,7 @@ public final class KeyboardView extends View {
             stripPointerId = -1;
             if (p.region == REGION_TILE) {
                 if (p.tile >= 0 && p.tile == tileAt(x, y)) {
-                    TextStyle chosen = TextStyle.values()[p.tile];
-                    stylePanelOpen = false;
-                    if (listener != null) listener.onStyleSelected(chosen);
+                    selectStyle(p.tile);
                 }
             } else if (p.region == stripRegionAt(x, y)) {
                 onStripTap(p.region);
@@ -799,9 +846,14 @@ public final class KeyboardView extends View {
             return;
         }
         if (p.consumed) return;
-        switch (p.key.type) {
+        activateKey(p.key);
+    }
+
+    /** Performs a key's tap action, for a touch release or an accessibility click. */
+    private void activateKey(Key k) {
+        switch (k.type) {
             case CHAR:
-                emitChar(p.key, displayCode(p.key));
+                emitChar(k, displayCode(k));
                 break;
             case SPACE:
                 emit(Key.CODE_SPACE);
@@ -814,11 +866,19 @@ public final class KeyboardView extends View {
                 emit(Key.CODE_ENTER);
                 break;
             case FUNCTION:
-                onFunctionKey(p.key.code);
+                onFunctionKey(k.code);
+                break;
+            case DELETE:
+                emit(Key.CODE_DELETE);
+                break;
+            case SHIFT:
+                onShiftDown(-1);
+                shiftPointerId = -1;
                 break;
             default:
                 break;
         }
+        notifyA11yLayoutChanged();
     }
 
     private void onStripTap(int region) {
@@ -826,6 +886,7 @@ public final class KeyboardView extends View {
         switch (region) {
             case REGION_CHIP:
                 stylePanelOpen = !stylePanelOpen;
+                notifyA11yLayoutChanged();
                 break;
             case REGION_SUGGESTION:
                 if (undoWord != null || pendingSlang != null) listener.onSuggestionTap();
@@ -839,6 +900,12 @@ public final class KeyboardView extends View {
             default:
                 break;
         }
+    }
+
+    private void selectStyle(int tile) {
+        stylePanelOpen = false;
+        notifyA11yLayoutChanged();
+        if (listener != null) listener.onStyleSelected(TextStyle.values()[tile]);
     }
 
     private void onFunctionKey(int code) {
@@ -871,6 +938,7 @@ public final class KeyboardView extends View {
         rebuildLayout();
         applyAutoCaps();
         requestLayout();
+        notifyA11yLayoutChanged();
     }
 
     private void emitChar(Key key, int code) {
@@ -896,14 +964,15 @@ public final class KeyboardView extends View {
 
     private void onShiftDown(int pointerId) {
         long now = SystemClock.uptimeMillis();
+        boolean doubleTap = lastShiftTapTime != NO_TAP && now - lastShiftTapTime < DOUBLE_TAP_MS;
         if (shift == Shift.LOCKED) {
             shift = Shift.OFF;
-        } else if (shift == Shift.ON && !shiftAuto && now - lastShiftTapTime < DOUBLE_TAP_MS) {
+            lastShiftTapTime = NO_TAP;
+        } else if (doubleTap) {
             shift = Shift.LOCKED;
-        } else if (shift == Shift.ON) {
-            shift = Shift.OFF;
+            lastShiftTapTime = NO_TAP;
         } else {
-            shift = Shift.ON;
+            shift = shift == Shift.ON ? Shift.OFF : Shift.ON;
             lastShiftTapTime = now;
         }
         shiftAuto = false;
@@ -970,8 +1039,8 @@ public final class KeyboardView extends View {
                 if (listener != null) listener.onSpaceLongPress();
                 break;
             case SHIFT:
+                if (shiftChordTyped) return;
                 shift = Shift.LOCKED;
-                shiftChordTyped = false;
                 feedback(p.key.code);
                 break;
             default:
@@ -1014,6 +1083,301 @@ public final class KeyboardView extends View {
     protected void onDetachedFromWindow() {
         cancelAllPointers();
         super.onDetachedFromWindow();
+    }
+
+    // ---------------------------------------------------------------- accessibility
+
+    /*
+     * Touch exploration (TalkBack): every key, strip control and style tile is a virtual view.
+     * Hovering announces it; lifting the finger on it types it (lift-to-type), and a
+     * double tap performs ACTION_CLICK on the focused virtual view.
+     */
+
+    private static final int VID_NONE = Integer.MIN_VALUE;
+    private static final int VID_STRIP = 10;
+    private static final int VID_TILE = 100;
+    private static final int VID_KEY = 1000;
+    private static final int VID_ROW = 100;
+
+    private int hoveredVid = VID_NONE;
+    private int a11yFocusedVid = VID_NONE;
+    private AccessibilityNodeProvider nodeProvider;
+
+    private boolean touchExploring() {
+        AccessibilityManager am = (AccessibilityManager)
+                getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+        return am != null && am.isEnabled() && am.isTouchExplorationEnabled();
+    }
+
+    private int virtualIdAt(float x, float y) {
+        if (y >= keysBottom()) return VID_NONE;
+        if (y < keysTop) {
+            int region = stripRegionAt(x, y);
+            return region == REGION_NONE ? VID_NONE : VID_STRIP + region;
+        }
+        if (stylePanelOpen) {
+            int t = tileAt(x, y);
+            return t < 0 ? VID_NONE : VID_TILE + t;
+        }
+        Key k = keyAt(x, y);
+        return k == null ? VID_NONE : keyVid(k);
+    }
+
+    private int keyVid(Key k) {
+        for (int r = 0; r < rows.size(); r++) {
+            int i = rows.get(r).keys.indexOf(k);
+            if (i >= 0) return VID_KEY + r * VID_ROW + i;
+        }
+        return VID_NONE;
+    }
+
+    private Key keyForVid(int vid) {
+        if (vid < VID_KEY || stylePanelOpen) return null;
+        int r = (vid - VID_KEY) / VID_ROW;
+        int i = (vid - VID_KEY) % VID_ROW;
+        if (r >= rows.size() || i >= rows.get(r).keys.size()) return null;
+        return rows.get(r).keys.get(i);
+    }
+
+    private boolean isValidVid(int vid) {
+        if (vid >= VID_KEY) return keyForVid(vid) != null;
+        if (vid >= VID_TILE) return stylePanelOpen && vid - VID_TILE < tileRects.length;
+        if (vid > VID_STRIP) return vid - VID_STRIP >= REGION_CHIP && vid - VID_STRIP <= REGION_GEAR
+                && (vid - VID_STRIP != REGION_SUGGESTION || undoWord != null || pendingSlang != null);
+        return false;
+    }
+
+    private void boundsForVid(int vid, Rect out) {
+        RectF r;
+        if (vid >= VID_KEY) {
+            r = keyForVid(vid).bounds;
+        } else if (vid >= VID_TILE) {
+            r = tileRects[vid - VID_TILE];
+        } else {
+            switch (vid - VID_STRIP) {
+                case REGION_CHIP: r = chipRect; break;
+                case REGION_SWAG: r = swagRect; break;
+                case REGION_GEAR: r = gearRect; break;
+                default: r = suggestionRect; break;
+            }
+        }
+        out.set(Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom));
+    }
+
+    private CharSequence describeVid(int vid) {
+        Context c = getContext();
+        if (vid >= VID_KEY) {
+            Key k = keyForVid(vid);
+            switch (k.type) {
+                case SHIFT:
+                    return c.getString(shift == Shift.LOCKED ? R.string.a11y_shift_locked
+                            : shift == Shift.ON ? R.string.a11y_shift_on : R.string.a11y_shift);
+                case DELETE:
+                    return c.getString(R.string.a11y_delete);
+                case SPACE:
+                    return c.getString(R.string.a11y_space);
+                case ENTER:
+                    return k.label != null ? k.label : c.getString(
+                            enterAction == EditorInfo.IME_ACTION_SEARCH ? R.string.a11y_search
+                                    : R.string.a11y_enter);
+                case FUNCTION:
+                    switch (k.code) {
+                        case Key.CODE_MODE_SYMBOLS: return c.getString(R.string.a11y_symbols);
+                        case Key.CODE_MODE_SYMBOLS2: return c.getString(R.string.a11y_more_symbols);
+                        case Key.CODE_MODE_ALPHA: return c.getString(R.string.a11y_letters);
+                        case Key.CODE_GLOBE: return c.getString(R.string.a11y_switch_keyboard);
+                        default: return k.label;
+                    }
+                default:
+                    return new String(Character.toChars(displayCode(k)));
+            }
+        }
+        if (vid >= VID_TILE) {
+            TextStyle t = TextStyle.values()[vid - VID_TILE];
+            return t == style ? c.getString(R.string.a11y_style_selected, t.label) : t.label;
+        }
+        switch (vid - VID_STRIP) {
+            case REGION_CHIP:
+                return c.getString(R.string.a11y_style_chip, stylesActive ? style.label : "PLAIN");
+            case REGION_SUGGESTION:
+                return undoWord != null ? c.getString(R.string.a11y_undo, undoWord)
+                        : c.getString(R.string.a11y_replace_with, String.valueOf(pendingSlang));
+            case REGION_SWAG:
+                return c.getString(slangOn ? R.string.a11y_slang_on : R.string.a11y_slang_off);
+            default:
+                return c.getString(R.string.a11y_settings);
+        }
+    }
+
+    private void clickVid(int vid) {
+        if (!isValidVid(vid)) return;
+        if (vid >= VID_KEY) {
+            Key k = keyForVid(vid);
+            feedback(k.code);
+            activateKey(k);
+        } else if (vid >= VID_TILE) {
+            feedback(0);
+            selectStyle(vid - VID_TILE);
+        } else {
+            feedback(0);
+            onStripTap(vid - VID_STRIP);
+        }
+        invalidate();
+    }
+
+    private boolean longClickVid(int vid) {
+        Key k = keyForVid(vid);
+        if (k == null) return false;
+        if (k.type == Key.Type.SPACE) {
+            if (listener != null) listener.onSpaceLongPress();
+            return true;
+        }
+        if (k.type == Key.Type.CHAR && k.longPressCode != 0) {
+            feedback(k.code);
+            emitChar(k, k.longPressCode);
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean dispatchHoverEvent(MotionEvent event) {
+        if (!touchExploring()) return super.dispatchHoverEvent(event);
+        int vid = virtualIdAt(event.getX(), event.getY());
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_HOVER_ENTER:
+            case MotionEvent.ACTION_HOVER_MOVE:
+                setHoveredVid(vid);
+                break;
+            case MotionEvent.ACTION_HOVER_EXIT:
+                // Lift-to-type: releasing the finger over the explored control activates it.
+                if (vid != VID_NONE && vid == hoveredVid) clickVid(vid);
+                setHoveredVid(VID_NONE);
+                break;
+            default:
+                break;
+        }
+        return true;
+    }
+
+    private void setHoveredVid(int vid) {
+        if (vid == hoveredVid) return;
+        int old = hoveredVid;
+        hoveredVid = vid;
+        if (old != VID_NONE) sendA11yEvent(old, AccessibilityEvent.TYPE_VIEW_HOVER_EXIT);
+        if (vid != VID_NONE) sendA11yEvent(vid, AccessibilityEvent.TYPE_VIEW_HOVER_ENTER);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void sendA11yEvent(int vid, int type) {
+        ViewParent parent = getParent();
+        if (parent == null || !isValidVid(vid)) return;
+        AccessibilityManager am = (AccessibilityManager)
+                getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+        if (am == null || !am.isEnabled()) return;
+        AccessibilityEvent e = AccessibilityEvent.obtain(type);
+        e.setPackageName(getContext().getPackageName());
+        e.setClassName(Key.class.getName());
+        e.setSource(this, vid);
+        e.setEnabled(true);
+        e.getText().add(describeVid(vid));
+        parent.requestSendAccessibilityEvent(this, e);
+    }
+
+    private void notifyA11yLayoutChanged() {
+        hoveredVid = VID_NONE;
+        a11yFocusedVid = VID_NONE;
+        ViewParent parent = getParent();
+        if (parent != null && touchExploring()) {
+            parent.notifySubtreeAccessibilityStateChanged(this, this,
+                    AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE);
+        }
+    }
+
+    @Override
+    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+        if (nodeProvider == null) nodeProvider = new KeyNodeProvider();
+        return nodeProvider;
+    }
+
+    private final class KeyNodeProvider extends AccessibilityNodeProvider {
+        private final Rect rect = new Rect();
+        private final int[] location = new int[2];
+
+        @Override
+        @SuppressWarnings("deprecation")
+        public AccessibilityNodeInfo createAccessibilityNodeInfo(int vid) {
+            if (vid == HOST_VIEW_ID) {
+                AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(KeyboardView.this);
+                onInitializeAccessibilityNodeInfo(info);
+                if (stylePanelOpen) {
+                    for (int i = 0; i < tileRects.length; i++) info.addChild(KeyboardView.this, VID_TILE + i);
+                } else {
+                    for (int r = 0; r < rows.size(); r++) {
+                        for (int i = 0; i < rows.get(r).keys.size(); i++) {
+                            info.addChild(KeyboardView.this, VID_KEY + r * VID_ROW + i);
+                        }
+                    }
+                }
+                for (int region = REGION_CHIP; region <= REGION_GEAR; region++) {
+                    if (isValidVid(VID_STRIP + region)) info.addChild(KeyboardView.this, VID_STRIP + region);
+                }
+                return info;
+            }
+            if (!isValidVid(vid)) return null;
+            AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(KeyboardView.this, vid);
+            info.setPackageName(getContext().getPackageName());
+            info.setClassName(Key.class.getName());
+            info.setParent(KeyboardView.this);
+            info.setContentDescription(describeVid(vid));
+            boundsForVid(vid, rect);
+            info.setBoundsInParent(rect);
+            getLocationOnScreen(location);
+            rect.offset(location[0], location[1]);
+            info.setBoundsInScreen(rect);
+            info.setEnabled(true);
+            info.setVisibleToUser(true);
+            info.setClickable(true);
+            info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK);
+            Key k = keyForVid(vid);
+            if (k != null && (k.type == Key.Type.SPACE || k.longPressCode != 0)) {
+                info.setLongClickable(true);
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK);
+            }
+            if (vid == a11yFocusedVid) {
+                info.setAccessibilityFocused(true);
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS);
+            } else {
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS);
+            }
+            return info;
+        }
+
+        @Override
+        public boolean performAction(int vid, int action, Bundle arguments) {
+            if (vid == HOST_VIEW_ID) return performAccessibilityAction(action, arguments);
+            if (!isValidVid(vid)) return false;
+            switch (action) {
+                case AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS:
+                    if (a11yFocusedVid == vid) return false;
+                    a11yFocusedVid = vid;
+                    sendA11yEvent(vid, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+                    return true;
+                case AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS:
+                    if (a11yFocusedVid != vid) return false;
+                    a11yFocusedVid = VID_NONE;
+                    sendA11yEvent(vid, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
+                    return true;
+                case AccessibilityNodeInfo.ACTION_CLICK:
+                    sendA11yEvent(vid, AccessibilityEvent.TYPE_VIEW_CLICKED);
+                    clickVid(vid);
+                    return true;
+                case AccessibilityNodeInfo.ACTION_LONG_CLICK:
+                    return longClickVid(vid);
+                default:
+                    return false;
+            }
+        }
     }
 
     // ---------------------------------------------------------------- feedback

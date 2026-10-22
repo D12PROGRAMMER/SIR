@@ -17,9 +17,11 @@ public final class InputLogic {
         void onInputStateChanged();
     }
 
-    /** IME_ACTION_NONE; duplicated so the class has no static dependency on EditorInfo. */
-    private static final int ACTION_NONE = 1;
     private static final int GRAPHEME_LOOKBEHIND = 64;
+    /** TYPE_TEXT_FLAG_CAP_CHARACTERS, equal to TextUtils.CAP_MODE_CHARACTERS. */
+    private static final int CAP_CHARACTERS = 0x00001000;
+
+    private enum Slang { NONE, AUTO, FORCE }
 
     private final Editor editor;
     private final Listener listener;
@@ -30,16 +32,21 @@ public final class InputLogic {
 
     /** Unstyled code points of the word currently held as composing text. */
     private final StringBuilder word = new StringBuilder();
+    /** The word continues text before it (e.g. "#tag", "lo|ok" after a correction): no slang. */
+    private boolean wordAttached;
     /** Absolute offset where the composing text starts, or -1 if unknown / not composing. */
     private int composingStart = -1;
     /** Expected selection after this IME's last edit; -1 when unknown. */
     private int selStart = -1;
     private int selEnd = -1;
+    /** Cursor offset after a picked suggestion where a space is owed, or -1. */
+    private int phantomSpaceAt = -1;
 
     /** Last slang substitution, revertible by Delete or the strip while the cursor is unmoved. */
     private String undoCommitted;
     private String undoRevert;
     private String undoOriginalWord;
+    private String undoSeparator;
     private int undoCursor = -1;
 
     public InputLogic(Editor editor, Listener listener) {
@@ -51,8 +58,13 @@ public final class InputLogic {
 
     public void startInput(FieldConfig config) {
         this.config = config;
+        if (word.length() > 0) {
+            // A reset while composing must not leave a region that the next keystroke replaces.
+            editor.finishComposingText();
+        }
         word.setLength(0);
         composingStart = -1;
+        phantomSpaceAt = -1;
         selStart = config.initialSelStart;
         selEnd = config.initialSelEnd;
         if (selStart > selEnd) {
@@ -71,6 +83,7 @@ public final class InputLogic {
         }
         word.setLength(0);
         composingStart = -1;
+        phantomSpaceAt = -1;
         clearUndo();
     }
 
@@ -107,9 +120,14 @@ public final class InputLogic {
         return config.mode == FieldConfig.Mode.STYLED;
     }
 
-    /** True if slang substitution applies to the current field. */
-    public boolean slangActive() {
-        return slangEnabled && config.slangAllowed && config.mode == FieldConfig.Mode.STYLED;
+    /** True if slang may be suggested in the current field. */
+    public boolean slangSuggestActive() {
+        return slangEnabled && config.slangSuggest && config.mode == FieldConfig.Mode.STYLED;
+    }
+
+    /** True if slang is applied automatically in the current field. */
+    public boolean slangAutoActive() {
+        return slangSuggestActive() && config.slangAuto;
     }
 
     // ---------------------------------------------------------------- queries for the UI
@@ -120,7 +138,7 @@ public final class InputLogic {
 
     /** Slang the current word would be replaced with, or null. */
     public String pendingSlang() {
-        if (!slangActive() || word.length() == 0) return null;
+        if (!slangSuggestActive() || word.length() == 0 || wordAttached) return null;
         return SlangDictionary.lookup(word.toString());
     }
 
@@ -131,8 +149,18 @@ public final class InputLogic {
 
     /** Whether the next letter should be capitalized according to the editor's caps mode. */
     public boolean shouldAutoCapitalize() {
-        if (config.capsInputType == 0 || word.length() > 0) return false;
-        return editor.getCursorCapsMode(config.capsInputType) != 0;
+        if (config.capsInputType == 0) return false;
+        if ((config.capsInputType & CAP_CHARACTERS) != 0) return true;
+        if (word.length() > 0) return false;
+        if (editor.getCursorCapsMode(config.capsInputType) != 0) return true;
+        if (style == TextStyle.WIDE || style == TextStyle.STRIKE) {
+            // Fullwidth and struck separators hide spaces and sentence ends from TextUtils.
+            CharSequence before = editor.getTextBeforeCursor(GRAPHEME_LOOKBEHIND);
+            if (before != null) {
+                return editor.capsModeOf(unstyleSeparators(before), config.capsInputType) != 0;
+            }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------- input events
@@ -151,25 +179,50 @@ public final class InputLogic {
                 commitPlain(new String(Character.toChars(cp)));
                 break;
             case STYLED:
-                clearUndo();
-                if (isWordCodePoint(cp)) {
-                    word.appendCodePoint(cp);
-                    showComposing();
-                } else {
-                    commitWord(true, new String(Character.toChars(cp)));
-                }
+                onStyledCodePoint(cp);
                 break;
         }
         notifyChanged();
     }
 
+    private void onStyledCodePoint(int cp) {
+        String text = new String(Character.toChars(cp));
+        if (word.length() == 0 && consumePhantomSpace()) {
+            if (isTrailingPunctuation(cp)) {
+                // "wassup" + "?" -> "wassup?" with the space still owed.
+                clearUndo();
+                commitWord(Slang.NONE, text);
+                phantomSpaceAt = selStart >= 0 ? selEnd : -1;
+                return;
+            }
+            if (cp != ' ' && cp != '\n') {
+                clearUndo();
+                commitWord(Slang.NONE, " ");
+            }
+        }
+        if (isWordCodePoint(cp) && word.length() == 0 && undoAvailable()
+                && (".".equals(undoSeparator) || ":".equals(undoSeparator))) {
+            // The token continues ("good.com", "best:"): take the replacement back.
+            undoSlang();
+        }
+        clearUndo();
+        if (isWordCodePoint(cp)) {
+            if (word.length() == 0) wordAttached = isAttachedToPreviousText();
+            word.appendCodePoint(cp);
+            showComposing();
+        } else {
+            commitWord(isJoiningSeparator(cp) ? Slang.NONE : Slang.AUTO, text);
+        }
+    }
+
     public void onEnter() {
-        if (config.enterAction != ACTION_NONE) {
+        phantomSpaceAt = -1;
+        if (config.enterIsAction) {
             if (config.mode == FieldConfig.Mode.STYLED && word.length() > 0) {
-                commitWord(true, "");
+                commitWord(Slang.AUTO, "");
             }
             clearUndo();
-            editor.performEditorAction(config.enterAction);
+            editor.performEditorAction(config.enterActionId);
             notifyChanged();
             return;
         }
@@ -183,6 +236,7 @@ public final class InputLogic {
     }
 
     public void onDelete() {
+        phantomSpaceAt = -1;
         if (config.mode == FieldConfig.Mode.RAW) {
             editor.sendDeleteKey();
             selStart = selEnd = -1;
@@ -208,11 +262,19 @@ public final class InputLogic {
         notifyChanged();
     }
 
-    /** Applies the pending slang to the current word immediately, followed by a space. */
+    /**
+     * Applies the pending slang to the current word immediately. The following space is
+     * inserted only once the next character needs it, so punctuation attaches to the word.
+     */
     public void pickSlang() {
         if (pendingSlang() == null) return;
         clearUndo();
-        commitWord(true, " ");
+        commitWord(Slang.FORCE, "");
+        if (selStart >= 0) {
+            phantomSpaceAt = selEnd;
+        } else {
+            commitWord(Slang.NONE, " ");
+        }
         notifyChanged();
     }
 
@@ -231,6 +293,7 @@ public final class InputLogic {
         if (selStart >= 0) {
             selStart = selEnd = selStart - undoCommitted.length() + undoRevert.length();
         }
+        phantomSpaceAt = -1;
         clearUndo();
         notifyChanged();
         return true;
@@ -248,15 +311,25 @@ public final class InputLogic {
             selEnd = ne;
             return;
         }
+        if (word.length() > 0 && composingStart >= 0 && candidatesStart == composingStart
+                && ns == ne && ns == candidatesEnd) {
+            // A cursor at the end of a composing region that starts at this word's start is one
+            // of this IME's own setComposingText states, in whatever order updates arrive.
+            return;
+        }
         if (selStart < 0) {
-            // Positions were unknown; adopt the editor's values if they are consistent with
-            // the composing state, otherwise treat this as an external change.
+            // Positions were unknown; adopt them if consistent with the composing state.
             boolean consistent = word.length() == 0
                     || (candidatesStart >= 0 && ns == ne && ne == candidatesEnd);
-            selStart = ns;
-            selEnd = ne;
             if (consistent) {
-                if (word.length() > 0) composingStart = candidatesStart;
+                if (word.length() > 0) {
+                    // The update may be stale; expect the state after the latest keystroke.
+                    composingStart = candidatesStart;
+                    selStart = selEnd = composingStart + style.apply(word).length();
+                } else {
+                    selStart = ns;
+                    selEnd = ne;
+                }
                 notifyChanged();
                 return;
             }
@@ -266,6 +339,7 @@ public final class InputLogic {
         // The selection was changed by the user or the application.
         selStart = ns;
         selEnd = ne;
+        phantomSpaceAt = -1;
         clearUndo();
         if (word.length() > 0) {
             word.setLength(0);
@@ -279,6 +353,64 @@ public final class InputLogic {
 
     static boolean isWordCodePoint(int cp) {
         return Character.isLetterOrDigit(cp) || SlangDictionary.isApostrophe(cp);
+    }
+
+    /** Separators that join tokens (handles, paths, e-mail, compounds): no slang before them. */
+    static boolean isJoiningSeparator(int cp) {
+        switch (cp) {
+            case '@': case '_': case '/': case '-': case '#': case '&': case '+': case '=':
+            case '\\':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean isTrailingPunctuation(int cp) {
+        switch (cp) {
+            case '.': case ',': case '!': case '?': case ';': case ':': case ')': case ']':
+            case '}':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** Whether a character ends a preceding token, so that a word starting after it is free-standing. */
+    static boolean isWordBoundary(int cp) {
+        if (Character.isWhitespace(cp) || Character.isSpaceChar(cp)) return true;
+        int type = Character.getType(cp);
+        return type == Character.START_PUNCTUATION || type == Character.INITIAL_QUOTE_PUNCTUATION
+                || cp == '"' || cp == 0xFF02;
+    }
+
+    private boolean isAttachedToPreviousText() {
+        CharSequence before = editor.getTextBeforeCursor(2);
+        if (before == null || before.length() == 0) return false;
+        return !isWordBoundary(Character.codePointBefore(before, before.length()));
+    }
+
+    /** Whether a space is owed at the cursor; clears the pending state either way. */
+    private boolean consumePhantomSpace() {
+        boolean here = phantomSpaceAt >= 0 && selStart == phantomSpaceAt && selEnd == phantomSpaceAt;
+        phantomSpaceAt = -1;
+        return here;
+    }
+
+    /** Maps WIDE and STRIKE separators back to the ASCII forms TextUtils.getCapsMode expects. */
+    static String unstyleSeparators(CharSequence text) {
+        StringBuilder out = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '̶') continue;
+            if (c == '　') {
+                c = ' ';
+            } else if (c >= '！' && c <= '～') {
+                c = (char) (c - 0xFEE0);
+            }
+            out.append(c);
+        }
+        return out.toString();
     }
 
     private boolean isBelatedExpectedUpdate(int oldStart, int oldEnd, int newStart, int newEnd) {
@@ -306,24 +438,30 @@ public final class InputLogic {
     }
 
     /**
-     * Commits the composing word (with slang if {@code withSlang}) followed by {@code separator},
-     * both styled, replacing the composing region or the selection.
+     * Commits the composing word (with slang according to {@code slang}) followed by
+     * {@code separator}, both styled, replacing the composing region or the selection.
      */
-    private void commitWord(boolean withSlang, String separator) {
+    private void commitWord(Slang slang, String separator) {
         String raw = word.toString();
-        String replacement = (withSlang && slangActive() && !raw.isEmpty())
-                ? SlangDictionary.lookup(raw) : null;
+        String replacement = null;
+        if (!raw.isEmpty() && !wordAttached
+                && (slang == Slang.FORCE ? slangSuggestActive()
+                        : slang == Slang.AUTO && slangAutoActive())) {
+            replacement = SlangDictionary.lookup(raw);
+        }
         String styledSep = style.apply(separator);
         String text = style.apply(replacement != null ? replacement : raw) + styledSep;
         int base = composingStart >= 0 ? composingStart : selStart;
         editor.commitText(text);
         word.setLength(0);
+        wordAttached = false;
         composingStart = -1;
         selStart = selEnd = base >= 0 ? base + text.length() : -1;
         if (replacement != null && !text.isEmpty()) {
             undoCommitted = text;
             undoRevert = style.apply(raw) + styledSep;
             undoOriginalWord = raw;
+            undoSeparator = separator;
             undoCursor = selEnd;
         }
     }
@@ -370,6 +508,14 @@ public final class InputLogic {
         if (start == BreakIterator.DONE || start >= end) {
             return Character.charCount(text.codePointBefore(end));
         }
+        // ICU 58 (API 26-27) splits emoji ZWJ sequences whose first element carries VS16;
+        // join clusters across a ZWJ that precedes a pictograph.
+        while (start > 0 && text.charAt(start - 1) == '‍'
+                && Character.getType(text.codePointAt(start)) == Character.OTHER_SYMBOL) {
+            int p = it.preceding(start);
+            if (p == BreakIterator.DONE) break;
+            start = p;
+        }
         return end - start;
     }
 
@@ -384,6 +530,7 @@ public final class InputLogic {
         undoCommitted = null;
         undoRevert = null;
         undoOriginalWord = null;
+        undoSeparator = null;
         undoCursor = -1;
     }
 

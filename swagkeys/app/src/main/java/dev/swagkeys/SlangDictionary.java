@@ -8,6 +8,9 @@ import java.util.Map;
 /**
  * Single-word slang substitutions applied when a word is completed. Lookup is
  * case-insensitive; the replacement inherits the capitalization pattern of the typed word.
+ * Entries are chosen so the replacement keeps the word's meaning and part of speech (no
+ * homographs such as "lie", no function words such as "no"), and every emoji is Emoji 1.0 so it
+ * renders on API 26.
  */
 public final class SlangDictionary {
 
@@ -43,16 +46,14 @@ public final class SlangDictionary {
         m.put("delicious", "bussin");
         m.put("tasty", "bussin");
         m.put("nice", "clean");
-        m.put("perfect", "chef's kiss 🤌");
+        m.put("perfect", "chef's kiss 👌");
         m.put("stylish", "drippy");
         m.put("fashionable", "drippy");
         m.put("beautiful", "stunning fr");
         m.put("gorgeous", "snatched");
         m.put("impressive", "hard");
-        m.put("fun", "a vibe");
         m.put("smart", "big brain");
         m.put("rich", "ballin");
-        m.put("win", "W");
         m.put("victory", "W");
         m.put("success", "dub");
         // Criticism
@@ -61,7 +62,6 @@ public final class SlangDictionary {
         m.put("boring", "mid");
         m.put("average", "mid");
         m.put("mediocre", "mid");
-        m.put("fail", "L");
         m.put("failure", "L");
         m.put("awkward", "cringe");
         m.put("embarrassing", "cringe");
@@ -69,43 +69,35 @@ public final class SlangDictionary {
         m.put("weird", "sus");
         m.put("fake", "cap");
         // Truth / agreement
-        m.put("lie", "cap");
-        m.put("lies", "cap");
-        m.put("lying", "cappin");
         m.put("seriously", "no cap");
         m.put("honestly", "ngl");
         m.put("truly", "fr fr");
         m.put("really", "deadass");
         m.put("true", "facts");
-        m.put("agreed", "bet");
-        m.put("okay", "bet");
-        m.put("ok", "bet");
+        m.put("okay", "aight");
+        m.put("ok", "aight");
         m.put("yes", "bet");
-        m.put("no", "nah");
         m.put("very", "hella");
         m.put("extremely", "mad");
         // Feelings
         m.put("angry", "pressed");
         m.put("annoyed", "tilted");
         m.put("jealous", "salty");
-        m.put("bitter", "salty");
         m.put("excited", "hyped");
-        m.put("tired", "dead");
+        m.put("tired", "wiped");
         m.put("exhausted", "cooked");
-        m.put("funny", "dead 💀");
-        m.put("hilarious", "dead 💀");
+        m.put("funny", "funny 💀");
+        m.put("hilarious", "hilarious 💀");
         m.put("lol", "💀");
         m.put("crazy", "wild");
         m.put("wow", "sheesh");
         m.put("relax", "chill");
         m.put("calm", "chill");
-        m.put("nervous", "shook");
         m.put("shocked", "shook");
         // Things
         m.put("money", "bands 💸");
         m.put("cash", "bread");
         m.put("house", "crib");
-        m.put("home", "crib");
         m.put("car", "whip");
         m.put("shoes", "kicks");
         m.put("sneakers", "kicks");
@@ -119,11 +111,9 @@ public final class SlangDictionary {
         // Actions / misc
         m.put("leave", "dip");
         m.put("leaving", "dipping");
-        m.put("showing", "flexing");
         m.put("boast", "flex");
         m.put("brag", "flex");
-        m.put("understand", "get it get it");
-        m.put("whatever", "it's whatever");
+        m.put("whatever", "whatevs");
         m.put("please", "pls");
         m.put("because", "cuz");
         m.put("thanks", "ty fam");

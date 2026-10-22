@@ -79,13 +79,28 @@ public enum TextStyle {
                     break;
                 case STRIKE:
                     out.appendCodePoint(cp);
-                    if (!Character.isWhitespace(cp)) out.append(COMBINING_LONG_STROKE);
+                    // One stroke after each cluster: never between a base and its variation
+                    // selector, skin tone, ZWJ or combining mark (that breaks emoji sequences).
+                    int next = i < plain.length() ? Character.codePointAt(plain, i) : -1;
+                    if (!Character.isWhitespace(cp) && cp != 0x200D && !joinsPrevious(next)) {
+                        out.append(COMBINING_LONG_STROKE);
+                    }
                     break;
                 default:
                     out.appendCodePoint(cp);
             }
         }
         return out.toString();
+    }
+
+    private static boolean joinsPrevious(int cp) {
+        if (cp < 0) return false;
+        if (cp == 0x200D || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x1F3FB && cp <= 0x1F3FF)) {
+            return true;
+        }
+        int type = Character.getType(cp);
+        return type == Character.NON_SPACING_MARK || type == Character.ENCLOSING_MARK
+                || type == Character.COMBINING_SPACING_MARK;
     }
 
     private static int leet(int cp) {

@@ -3,6 +3,7 @@ package dev.swagkeys;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -75,14 +76,38 @@ public class TextTransformTest {
         assertEquals("wassup", SlangDictionary.lookup("hello"));
         assertEquals("Wassup", SlangDictionary.lookup("Hello"));
         assertEquals("WASSUP", SlangDictionary.lookup("HELLO"));
-        assertEquals("Bet", SlangDictionary.lookup("Ok"));
-        assertEquals("BET", SlangDictionary.lookup("OK"));
+        assertEquals("Aight", SlangDictionary.lookup("Ok"));
+        assertEquals("AIGHT", SlangDictionary.lookup("OK"));
         assertEquals("'lit 🔥'", SlangDictionary.lookup("'cool'"));
         assertEquals("💀", SlangDictionary.lookup("LOL"));
-        assertEquals("Chef's kiss 🤌", SlangDictionary.lookup("Perfect"));
+        assertEquals("Chef's kiss 👌", SlangDictionary.lookup("Perfect"));
         assertNull(SlangDictionary.lookup("keyboard"));
         assertNull(SlangDictionary.lookup("''"));
         assertNull(SlangDictionary.lookup(""));
+    }
+
+    @Test
+    public void strikeKeepsEmojiSequencesIntact() {
+        assertEquals("✌️\u0336", TextStyle.STRIKE.apply("✌️"));
+        assertEquals("👍🏽\u0336", TextStyle.STRIKE.apply("👍🏽"));
+        assertEquals("é\u0336", TextStyle.STRIKE.apply("e\u0301").replace("e\u0301", "é"));
+    }
+
+    @Test
+    public void meaningChangingAndFunctionWordsAreNotReplaced() {
+        for (String w : new String[] {"lie", "lies", "lying", "agreed", "bitter", "nervous", "no",
+                "fun", "understand", "home", "win", "fail", "showing"}) {
+            assertNull(w, SlangDictionary.lookup(w));
+        }
+        assertEquals("wiped", SlangDictionary.lookup("tired"));
+        assertEquals("funny 💀", SlangDictionary.lookup("funny"));
+    }
+
+    @Test
+    public void replacementsUseEmojiAvailableOnApi26() {
+        for (String v : SlangDictionary.entries().values()) {
+            v.codePoints().forEach(cp -> assertTrue(v, cp < 0x1F900));
+        }
     }
 
     @Test

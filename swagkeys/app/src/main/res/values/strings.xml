@@ -15,7 +15,7 @@
     <string name="style_note">Applied as you type. Change it any time from the style chip on the keyboard. Passwords, e-mail, URLs and number fields are never styled.</string>
 
     <string name="slang_toggle">Auto-correct to swag slang</string>
-    <string name="slang_note">Dictionary entries: %1$d. A listed word is replaced when you finish it (space, punctuation or enter). Press delete right after a replacement, or tap UNDO in the strip, to restore what you typed. The SWAG pill on the keyboard toggles this.</string>
+    <string name="slang_note">Dictionary entries: %1$d. In chat-style fields a listed word is replaced when you finish it (space, punctuation or enter); press delete right after, or tap UNDO in the strip, to restore what you typed. In search, name and address boxes the slang is only offered in the strip: tap it to apply. Words glued to other text (#tags, @names, web addresses) are left alone. The SWAG pill on the keyboard toggles this: solid red = automatic, red outline = strip only.</string>
     <string name="show_dictionary">Show dictionary</string>
     <string name="hide_dictionary">Hide dictionary</string>
 
@@ -23,7 +23,7 @@
     <string name="theme_dark">Dark (Nothing black)</string>
     <string name="theme_light">Light (Nothing white)</string>
 
-    <string name="font_note">Nothing OS uses its NDot typefaces, which Nothing licenses for Nothing brand use only, so they are not bundled. SwagKeys ships Doto, an open-source (SIL OFL 1.1) dot-matrix face in the same style. If you have a font file such as NDot 57, import it here.</string>
+    <string name="font_note">Nothing OS uses its NDot typefaces, which Nothing licenses for Nothing brand use only, so they are not bundled. SwagKeys ships Doto, an open-source (SIL OFL 1.1) dot-matrix face in the same style. You can also import any .ttf or .otf font you have the rights to use.</string>
     <string name="font_doto">Doto (bundled)</string>
     <string name="font_custom">Imported font</string>
     <string name="import_font">Import .ttf / .otf</string>
@@ -41,4 +41,23 @@
 
     <string name="credits">Doto typeface © 2024 The Doto Project Authors (github.com/oliverlalan/Doto), licensed under the SIL Open Font License 1.1. Not affiliated with Nothing Technology Ltd.</string>
     <string name="show_license">Show font license</string>
+
+    <string name="a11y_shift">Shift</string>
+    <string name="a11y_shift_on">Shift, on</string>
+    <string name="a11y_shift_locked">Caps lock, on</string>
+    <string name="a11y_delete">Delete</string>
+    <string name="a11y_space">Space</string>
+    <string name="a11y_enter">Enter</string>
+    <string name="a11y_search">Search</string>
+    <string name="a11y_symbols">Symbols</string>
+    <string name="a11y_more_symbols">More symbols</string>
+    <string name="a11y_letters">Letters</string>
+    <string name="a11y_switch_keyboard">Switch keyboard</string>
+    <string name="a11y_style_selected">%1$s, selected</string>
+    <string name="a11y_style_chip">Text style: %1$s</string>
+    <string name="a11y_undo">Undo slang, restore %1$s</string>
+    <string name="a11y_replace_with">Replace with %1$s</string>
+    <string name="a11y_slang_on">Swag slang autocorrect, on</string>
+    <string name="a11y_slang_off">Swag slang autocorrect, off</string>
+    <string name="a11y_settings">SwagKeys settings</string>
 </resources>

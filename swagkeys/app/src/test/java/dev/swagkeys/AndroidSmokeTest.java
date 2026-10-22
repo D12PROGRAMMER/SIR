@@ -43,29 +43,57 @@ public class AndroidSmokeTest {
         FieldConfig text = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, EditorInfo.IME_ACTION_SEND));
         assertEquals(FieldConfig.Mode.STYLED, text.mode);
-        assertTrue(text.slangAllowed);
+        assertTrue(text.slangSuggest);
+        assertFalse(text.slangAuto); // single-line without AUTO_CORRECT: strip only
         assertTrue(text.capsInputType != 0);
-        assertEquals(EditorInfo.IME_ACTION_SEND, text.enterAction);
+        assertTrue(text.enterIsAction);
+        assertEquals(EditorInfo.IME_ACTION_SEND, text.enterActionId);
 
         FieldConfig pw = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_PASSWORD, EditorInfo.IME_ACTION_DONE));
         assertEquals(FieldConfig.Mode.PLAIN, pw.mode);
-        assertFalse(pw.slangAllowed);
+        assertFalse(pw.slangSuggest);
 
         FieldConfig mail = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, 0));
         assertEquals(FieldConfig.Mode.PLAIN, mail.mode);
-        assertEquals(EditorInfo.IME_ACTION_NONE, mail.enterAction);
+        assertTrue(mail.enterIsAction); // UNSPECIFIED on a single-line field is an action
 
         FieldConfig noSuggest = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS, 0));
         assertEquals(FieldConfig.Mode.STYLED, noSuggest.mode);
-        assertFalse(noSuggest.slangAllowed);
+        assertFalse(noSuggest.slangSuggest);
 
         FieldConfig multi = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_FLAG_MULTI_LINE,
                 EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_ENTER_ACTION));
-        assertEquals(EditorInfo.IME_ACTION_NONE, multi.enterAction);
+        assertFalse(multi.enterIsAction);
+        assertTrue(multi.slangAuto);
+
+        FieldConfig chat = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_AUTO_CORRECT, EditorInfo.IME_ACTION_SEND));
+        assertTrue(chat.slangAuto);
+        FieldConfig name = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PERSON_NAME | InputType.TYPE_TEXT_FLAG_MULTI_LINE, 0));
+        assertFalse(name.slangAuto);
+        assertTrue(name.slangSuggest);
+        FieldConfig unspecifiedMulti = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE, EditorInfo.IME_ACTION_UNSPECIFIED));
+        assertFalse(unspecifiedMulti.enterIsAction);
+
+        EditorInfo labelled = info(InputType.TYPE_CLASS_TEXT, EditorInfo.IME_ACTION_DONE);
+        labelled.actionLabel = "Login";
+        labelled.actionId = 4242;
+        FieldConfig login = FieldConfig.from(labelled);
+        assertTrue(login.enterIsAction);
+        assertEquals(4242, login.enterActionId);
+        assertEquals("Login", login.enterLabel);
+
+        FieldConfig code = FieldConfig.from(info(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS, 0));
+        assertEquals(FieldConfig.Mode.PLAIN, code.mode);
+        assertTrue(code.capsInputType != 0);
 
         assertEquals(FieldConfig.Layout.NUMBER,
                 FieldConfig.from(info(InputType.TYPE_CLASS_NUMBER, 0)).layout);

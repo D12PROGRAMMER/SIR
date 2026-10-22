@@ -7,6 +7,7 @@ import android.graphics.Typeface;
 import android.inputmethodservice.InputMethodService;
 import android.os.Build;
 import android.os.IBinder;
+import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.Window;
@@ -23,6 +24,8 @@ public final class SwagKeysService extends InputMethodService
     private InputLogic logic;
     private KeyboardView keyboard;
     private boolean fontsDirty = true;
+    /** EditorInfo of the input currently started, to recognize IME-internal restarts. */
+    private EditorInfo startedInfo;
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
             (sp, key) -> onPreferenceChanged(key);
@@ -61,6 +64,11 @@ public final class SwagKeysService extends InputMethodService
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        // InputMethodService restarts the same EditorInfo instance after a configuration change
+        // (resetStateForNewConfiguration). The connection, composing span and tracked selection
+        // are still valid then; resetting would let the next keystroke replace the composing word.
+        if (restarting && attribute != null && attribute == startedInfo) return;
+        startedInfo = attribute;
         logic.startInput(FieldConfig.from(attribute));
     }
 
@@ -70,7 +78,7 @@ public final class SwagKeysService extends InputMethodService
         if (keyboard == null) return;
         applyAppearance();
         FieldConfig config = logic.config();
-        keyboard.setField(config.layout, config.enterAction, offerGlobeKey());
+        keyboard.setField(config.layout, config.enterKeyAction, config.enterLabel, offerGlobeKey());
         onInputStateChanged();
     }
 
@@ -83,6 +91,7 @@ public final class SwagKeysService extends InputMethodService
 
     @Override
     public void onFinishInput() {
+        startedInfo = null;
         logic.finishInput();
         super.onFinishInput();
     }
@@ -121,9 +130,10 @@ public final class SwagKeysService extends InputMethodService
         Window window = getWindow() == null ? null : getWindow().getWindow();
         if (window == null || keyboard == null) return;
         Palette p = keyboard.palette();
-        // Ignored on Android 15+ for edge-to-edge windows; KeyboardView then pads for the
-        // navigation bar inset and draws its own background behind it.
+        // On API 35+ the IME window is edge-to-edge and KeyboardView draws behind the navigation
+        // bar itself; the color still matters for the area DecorView paints, without a scrim.
         window.setNavigationBarColor(p.background);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.setNavigationBarContrastEnforced(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController c = window.getInsetsController();
             if (c != null) {
@@ -183,8 +193,10 @@ public final class SwagKeysService extends InputMethodService
     @Override
     public void onInputStateChanged() {
         if (keyboard == null) return;
+        int slangMode = logic.slangAutoActive() ? KeyboardView.SLANG_AUTO
+                : logic.slangSuggestActive() ? KeyboardView.SLANG_SUGGEST : KeyboardView.SLANG_OFF;
         keyboard.setStripState(logic.style(), logic.stylesActive(), logic.isSlangEnabled(),
-                logic.slangActive(), logic.pendingSlang(), logic.undoableWord());
+                slangMode, logic.pendingSlang(), logic.undoableWord());
         keyboard.setAutoCaps(logic.shouldAutoCapitalize());
     }
 
@@ -306,6 +318,11 @@ public final class SwagKeysService extends InputMethodService
         public int getCursorCapsMode(int reqModes) {
             InputConnection ic = getCurrentInputConnection();
             return ic == null ? 0 : ic.getCursorCapsMode(reqModes);
+        }
+
+        @Override
+        public int capsModeOf(CharSequence text, int reqModes) {
+            return TextUtils.getCapsMode(text, text.length(), reqModes);
         }
 
         @Override

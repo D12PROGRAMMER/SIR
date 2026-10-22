@@ -7,10 +7,15 @@ import static org.junit.Assert.assertTrue;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.EditorInfo;
 
 import org.junit.Before;
@@ -20,6 +25,8 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
+import org.robolectric.shadow.api.Shadow;
+import org.robolectric.shadows.ShadowAccessibilityManager;
 import org.robolectric.shadows.ShadowLooper;
 
 import java.io.File;
@@ -56,7 +63,7 @@ public class KeyboardRenderTest {
             @Override public void onSuggestionTap() { keys.add(-101); }
             @Override public void onOpenSettings() { keys.add(-102); }
         });
-        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_NONE, true);
+        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_NONE, null, true);
         layout();
     }
 
@@ -122,12 +129,12 @@ public class KeyboardRenderTest {
     @Test
     public void rendersAllModes() throws IOException {
         view.setPalette(Palette.DARK);
-        view.setStripState(TextStyle.LEET, true, true, true, "wassup", null);
+        view.setStripState(TextStyle.LEET, true, true, KeyboardView.SLANG_AUTO, "wassup", null);
         assertTrue(shot("01_letters_dark").length() > 0);
 
         view.setPalette(Palette.LIGHT);
         view.setAutoCaps(true);
-        view.setStripState(TextStyle.NORMAL, true, true, true, null, "cool");
+        view.setStripState(TextStyle.NORMAL, true, true, KeyboardView.SLANG_SUGGEST, null, "cool");
         shot("02_letters_light_shift");
 
         view.setPalette(Palette.DARK);
@@ -137,17 +144,17 @@ public class KeyboardRenderTest {
         tap(find(Key.CODE_MODE_SYMBOLS2));
         shot("04_symbols2");
 
-        view.setField(FieldConfig.Layout.PHONE, EditorInfo.IME_ACTION_DONE, false);
+        view.setField(FieldConfig.Layout.PHONE, EditorInfo.IME_ACTION_DONE, null, false);
         shot("05_phone");
 
-        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_SEARCH, false);
-        view.setStripState(TextStyle.BOLD, true, false, true, null, null);
+        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_SEARCH, null, false);
+        view.setStripState(TextStyle.BOLD, true, false, KeyboardView.SLANG_AUTO, null, null);
         Key e = find('e');
         touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{e.bounds.centerX(), e.bounds.centerY()}});
         shot("06_preview_pressed");
         touch(MotionEvent.ACTION_UP, 0, new float[][] {{e.bounds.centerX(), e.bounds.centerY()}});
 
-        view.setStripState(TextStyle.SCRIPT, true, true, false, null, null);
+        view.setStripState(TextStyle.SCRIPT, true, true, KeyboardView.SLANG_OFF, null, null);
         // Open the style panel via the chip (strip, left edge).
         float[][] chip = {{40f, 40f}};
         touch(MotionEvent.ACTION_DOWN, 0, chip);
@@ -242,6 +249,114 @@ public class KeyboardRenderTest {
         assertEquals(List.of(TextStyle.LEET), stylesPicked);
         assertTrue(!view.isStylePanelOpen());
         assertNotNull(find('q'));
+    }
+
+    @Test
+    public void rollOverEmitsHeldSpaceBeforeNextLetter() {
+        Key space = find(Key.CODE_SPACE);
+        Key c = find('c');
+        float[] ps = {space.bounds.centerX(), space.bounds.centerY()};
+        float[] pc = {c.bounds.centerX(), c.bounds.centerY()};
+        touch(MotionEvent.ACTION_DOWN, 0, new int[] {0}, new float[][] {ps});
+        touch(MotionEvent.ACTION_POINTER_DOWN, 1, new int[] {0, 1}, new float[][] {ps, pc});
+        touch(MotionEvent.ACTION_POINTER_UP, 1, new int[] {0, 1}, new float[][] {ps, pc});
+        touch(MotionEvent.ACTION_UP, 0, new int[] {0}, new float[][] {ps});
+        assertEquals(List.of((int) ' ', (int) 'c'), keys);
+    }
+
+    @Test
+    public void shiftChordDoesNotLockCaps() {
+        view.setAutoCaps(false);
+        Key shift = find(Key.CODE_SHIFT);
+        Key h = find('h');
+        float[] psh = {shift.bounds.centerX(), shift.bounds.centerY()};
+        float[] ph = {h.bounds.centerX(), h.bounds.centerY()};
+        touch(MotionEvent.ACTION_DOWN, 0, new int[] {0}, new float[][] {psh});
+        touch(MotionEvent.ACTION_POINTER_DOWN, 1, new int[] {0, 1}, new float[][] {psh, ph});
+        touch(MotionEvent.ACTION_POINTER_UP, 1, new int[] {0, 1}, new float[][] {psh, ph});
+        ShadowLooper.idleMainLooper(600, java.util.concurrent.TimeUnit.MILLISECONDS);
+        touch(MotionEvent.ACTION_UP, 0, new int[] {0}, new float[][] {psh});
+        assertEquals(List.of((int) 'H'), keys);
+        assertEquals(KeyboardView.Shift.OFF, view.shift());
+    }
+
+    @Test
+    public void doubleTapShiftLocksFromAutoCaps() {
+        view.setAutoCaps(true);
+        assertEquals(KeyboardView.Shift.ON, view.shift());
+        tap(find(Key.CODE_SHIFT));
+        tap(find(Key.CODE_SHIFT));
+        assertEquals(KeyboardView.Shift.LOCKED, view.shift());
+        tap(find('o'));
+        tap(find('k'));
+        assertEquals(List.of((int) 'O', (int) 'K'), keys);
+    }
+
+    @Test
+    public void shiftLetterShiftDoesNotLock() {
+        view.setAutoCaps(false);
+        tap(find(Key.CODE_SHIFT));
+        tap(find('a'));
+        tap(find(Key.CODE_SHIFT));
+        assertEquals(KeyboardView.Shift.ON, view.shift());
+    }
+
+    @Test
+    public void bottomInsetCoversImeNavigationBarFrame() {
+        float density = context.getResources().getDisplayMetrics().density;
+        int nav = Math.round(24 * density);
+        int caption = Math.round(48 * density);
+        int before = view.getMeasuredHeight();
+        view.dispatchApplyWindowInsets(new WindowInsets.Builder()
+                .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, nav))
+                .setInsets(WindowInsets.Type.captionBar(), Insets.of(0, 0, 0, caption))
+                .build());
+        layout();
+        assertEquals(before + caption, view.getMeasuredHeight());
+        // Touches in the inset band do not press bottom-row keys.
+        float[][] p = {{view.getWidth() / 2f, view.getHeight() - caption / 2f}};
+        touch(MotionEvent.ACTION_DOWN, 0, p);
+        touch(MotionEvent.ACTION_UP, 0, p);
+        assertTrue(keys.isEmpty());
+    }
+
+    @Test
+    public void accessibilityNodesAndClicks() {
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        AccessibilityNodeInfo host = provider.createAccessibilityNodeInfo(
+                AccessibilityNodeProvider.HOST_VIEW_ID);
+        // 10 + 9 + 9 + 6 keys (with globe) plus chip, SWAG and settings.
+        assertEquals(34 + 3, host.getChildCount());
+        AccessibilityNodeInfo q = provider.createAccessibilityNodeInfo(1000);
+        assertEquals("q", q.getContentDescription().toString());
+        AccessibilityNodeInfo shiftNode = provider.createAccessibilityNodeInfo(1000 + 2 * 100);
+        assertEquals("Shift", shiftNode.getContentDescription().toString());
+        assertTrue(provider.performAction(1000, AccessibilityNodeInfo.ACTION_CLICK, null));
+        assertTrue(provider.performAction(1000, AccessibilityNodeInfo.ACTION_LONG_CLICK, null));
+        assertEquals(List.of((int) 'q', (int) '1'), keys);
+    }
+
+    @Test
+    public void touchExplorationLiftToType() {
+        AccessibilityManager am = (AccessibilityManager)
+                context.getSystemService(Context.ACCESSIBILITY_SERVICE);
+        ShadowAccessibilityManager sam = Shadow.extract(am);
+        sam.setEnabled(true);
+        sam.setTouchExplorationEnabled(true);
+        Key w = find('w');
+        hover(MotionEvent.ACTION_HOVER_ENTER, w.bounds.centerX(), w.bounds.centerY());
+        hover(MotionEvent.ACTION_HOVER_MOVE, w.bounds.centerX() + 2, w.bounds.centerY());
+        assertTrue(keys.isEmpty());
+        hover(MotionEvent.ACTION_HOVER_EXIT, w.bounds.centerX() + 2, w.bounds.centerY());
+        assertEquals(List.of((int) 'w'), keys);
+    }
+
+    private void hover(int action, float x, float y) {
+        long now = SystemClock.uptimeMillis();
+        MotionEvent ev = MotionEvent.obtain(now, now, action, x, y, 0);
+        ev.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+        view.dispatchHoverEvent(ev);
+        ev.recycle();
     }
 
     @Test

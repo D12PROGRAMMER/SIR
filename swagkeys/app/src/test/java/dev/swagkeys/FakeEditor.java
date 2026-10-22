@@ -29,8 +29,7 @@ final class FakeEditor implements Editor {
     }
 
     FieldConfig config(FieldConfig.Mode mode, boolean slang, int capsInputType, int enterAction) {
-        return new FieldConfig(mode, FieldConfig.Layout.TEXT, slang, capsInputType, enterAction,
-                selStart, selEnd);
+        return FieldConfig.text(mode, slang, capsInputType, enterAction, selStart, selEnd);
     }
 
     String value() {
@@ -52,6 +51,11 @@ final class FakeEditor implements Editor {
         if (pending.isEmpty()) return;
         int[] u = pending.remove(0);
         logic.onUpdateSelection(u[0], u[1], u[2], u[3], u[4], u[5]);
+    }
+
+    /** Delivers every queued update except the most recent (an editor lagging one keystroke). */
+    void deliverAllButLast() {
+        while (pending.size() > 1) deliverOne();
     }
 
     /** User taps to place the cursor (composing span is left in place, as TextView does). */
@@ -162,11 +166,19 @@ final class FakeEditor implements Editor {
 
     @Override
     public int getCursorCapsMode(int reqModes) {
+        return capsModeOf(text.substring(0, selStart), reqModes);
+    }
+
+    /** Simplified TextUtils.getCapsMode: sentence start after ". ", "! ", "? " or at the start. */
+    @Override
+    public int capsModeOf(CharSequence textBefore, int reqModes) {
         if (capsAlways) return reqModes;
-        String before = text.substring(0, selStart).replaceAll("\\s+$", "");
+        String all = textBefore.toString();
+        String before = all.replaceAll("[ \\t]+$", "");
         boolean sentenceStart = before.isEmpty() || before.endsWith(".") || before.endsWith("!")
-                || before.endsWith("?");
-        boolean afterSpace = selStart == 0 || Character.isWhitespace(text.charAt(selStart - 1));
+                || before.endsWith("?") || before.endsWith("\n");
+        boolean afterSpace = all.isEmpty() || all.endsWith(" ") || all.endsWith("\t")
+                || all.endsWith("\n");
         return sentenceStart && afterSpace ? 0x4000 : 0;
     }
 
