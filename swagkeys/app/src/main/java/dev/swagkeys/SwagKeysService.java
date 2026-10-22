@@ -1,5 +1,6 @@
 package dev.swagkeys;
 
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -27,6 +28,8 @@ public final class SwagKeysService extends InputMethodService
     private boolean fontsDirty = true;
     /** EditorInfo of the input currently started, to recognize IME-internal restarts. */
     private EditorInfo startedInfo;
+    /** Undo state at the previous update, to detect a slang substitution as it happens. */
+    private String lastUndoWord;
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
             (sp, key) -> onPreferenceChanged(key);
@@ -118,8 +121,12 @@ public final class SwagKeysService extends InputMethodService
 
     private void applyAppearance() {
         if (keyboard == null) return;
-        keyboard.setPalette(Palette.resolve(this, prefs.theme()));
+        keyboard.setPalette(Palette.resolve(this, prefs.theme())
+                .withAccent(Palette.accentColor(prefs.accent())));
         keyboard.setFeedback(prefs.haptics(), prefs.sound());
+        // Also off when the system disables animations (Remove animations / animator scale 0).
+        keyboard.setAnimations(prefs.animations() && ValueAnimator.areAnimatorsEnabled());
+        keyboard.setNumberRow(prefs.numberRow());
         if (fontsDirty) {
             Typeface[] faces = Fonts.resolve(this, prefs);
             keyboard.setFonts(faces[0], faces[1]);
@@ -169,6 +176,9 @@ public final class SwagKeysService extends InputMethodService
             case Prefs.KEY_THEME:
             case Prefs.KEY_HAPTICS:
             case Prefs.KEY_SOUND:
+            case Prefs.KEY_ACCENT:
+            case Prefs.KEY_ANIMATIONS:
+            case Prefs.KEY_NUMBER_ROW:
                 applyAppearance();
                 break;
             default:
@@ -183,8 +193,11 @@ public final class SwagKeysService extends InputMethodService
         if (keyboard == null) return;
         int slangMode = logic.slangAutoActive() ? KeyboardView.SLANG_AUTO
                 : logic.slangSuggestActive() ? KeyboardView.SLANG_SUGGEST : KeyboardView.SLANG_OFF;
+        String undo = logic.undoableWord();
         keyboard.setStripState(logic.style(), logic.stylesActive(), logic.isSlangEnabled(),
-                slangMode, logic.pendingSlang(), logic.undoableWord());
+                slangMode, logic.pendingSlang(), undo);
+        if (undo != null && lastUndoWord == null) keyboard.playSlangAnimation(logic.undoReplacement());
+        lastUndoWord = undo;
         keyboard.setAutoCaps(logic.shouldAutoCapitalize());
     }
 
@@ -241,6 +254,16 @@ public final class SwagKeysService extends InputMethodService
         }
         // No other switching-aware keyboard to rotate to: let the user pick one.
         if (imm != null) imm.showInputMethodPicker();
+    }
+
+    @Override
+    public void onCursorMove(int steps) {
+        logic.moveCursor(steps);
+    }
+
+    @Override
+    public void onDeleteWords(int words) {
+        logic.deleteWords(words);
     }
 
     @Override
@@ -322,6 +345,11 @@ public final class SwagKeysService extends InputMethodService
         @Override
         public void sendDeleteKey() {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL);
+        }
+
+        @Override
+        public void sendKey(int keyCode) {
+            sendDownUpKeyEvents(keyCode);
         }
 
         @Override

@@ -18,6 +18,10 @@ public final class InputLogic {
     }
 
     private static final int GRAPHEME_LOOKBEHIND = 64;
+    private static final int WORD_LOOKBEHIND = 1024;
+    /** KeyEvent.KEYCODE_DPAD_LEFT / KEYCODE_DPAD_RIGHT. */
+    static final int KEYCODE_DPAD_LEFT = 21;
+    static final int KEYCODE_DPAD_RIGHT = 22;
     /** TYPE_TEXT_FLAG_CAP_CHARACTERS, equal to TextUtils.CAP_MODE_CHARACTERS. */
     private static final int CAP_CHARACTERS = 0x00001000;
 
@@ -47,6 +51,7 @@ public final class InputLogic {
     private String undoRevert;
     private String undoOriginalWord;
     private String undoSeparator;
+    private String undoReplacement;
     private int undoCursor = -1;
 
     public InputLogic(Editor editor, Listener listener) {
@@ -142,6 +147,11 @@ public final class InputLogic {
         return SlangDictionary.lookup(word.toString());
     }
 
+    /** The replacement (as shown, styled) of the revertible slang substitution, or null. */
+    public String undoReplacement() {
+        return undoAvailable() ? undoReplacement : null;
+    }
+
     /** The original word restorable by {@link #undoSlang()}, or null. */
     public String undoableWord() {
         return undoAvailable() ? undoOriginalWord : null;
@@ -153,7 +163,7 @@ public final class InputLogic {
         if ((config.capsInputType & CAP_CHARACTERS) != 0) return true;
         if (word.length() > 0) return false;
         if (editor.getCursorCapsMode(config.capsInputType) != 0) return true;
-        if (style == TextStyle.WIDE || style == TextStyle.STRIKE) {
+        if (style == TextStyle.WIDE || style == TextStyle.STRIKE || style == TextStyle.UNDERLINE) {
             // Fullwidth and struck separators hide spaces and sentence ends from TextUtils.
             CharSequence before = editor.getTextBeforeCursor(GRAPHEME_LOOKBEHIND);
             if (before != null) {
@@ -303,6 +313,74 @@ public final class InputLogic {
         notifyChanged();
     }
 
+    /**
+     * Moves the cursor by {@code steps} characters with arrow-key events, which every editor
+     * (including TYPE_NULL terminals) handles grapheme-aware. The composing word is kept as typed.
+     */
+    public void moveCursor(int steps) {
+        if (steps == 0) return;
+        phantomSpaceAt = -1;
+        clearUndo();
+        if (word.length() > 0) {
+            editor.finishComposingText();
+            word.setLength(0);
+            composingStart = -1;
+        }
+        int key = steps < 0 ? KEYCODE_DPAD_LEFT : KEYCODE_DPAD_RIGHT;
+        for (int i = 0; i < Math.abs(steps); i++) editor.sendKey(key);
+        // The editor reports the new position through onUpdateSelection.
+        selStart = selEnd = -1;
+        notifyChanged();
+    }
+
+    /** Deletes the {@code words} words before the cursor (the composing word counts as one). */
+    public void deleteWords(int words) {
+        if (words <= 0 || config.mode == FieldConfig.Mode.RAW) return;
+        phantomSpaceAt = -1;
+        clearUndo();
+        int remaining = words;
+        if (config.mode == FieldConfig.Mode.STYLED && word.length() > 0) {
+            editor.setComposingText("");
+            if (composingStart >= 0) selStart = selEnd = composingStart;
+            composingStart = -1;
+            word.setLength(0);
+            remaining--;
+        }
+        if (remaining > 0) {
+            boolean hasSelection = selStart >= 0 ? selStart != selEnd : hasSelectedText();
+            if (hasSelection) {
+                editor.sendDeleteKey();
+                if (selStart >= 0) selEnd = selStart;
+                remaining--;
+            }
+        }
+        if (remaining > 0) {
+            CharSequence before = editor.getTextBeforeCursor(WORD_LOOKBEHIND);
+            if (before != null) {
+                int n = wordsBackLength(before, remaining);
+                if (n > 0) {
+                    editor.deleteSurroundingText(n, 0);
+                    if (selStart >= 0) selStart = selEnd = Math.max(0, selStart - n);
+                }
+            }
+        }
+        notifyChanged();
+    }
+
+    /** Length of the trailing {@code words} whitespace-separated words, with their spacing. */
+    static int wordsBackLength(CharSequence text, int words) {
+        int i = text.length();
+        for (int w = 0; w < words && i > 0; w++) {
+            while (i > 0 && Character.isWhitespace(Character.codePointBefore(text, i))) {
+                i -= Character.charCount(Character.codePointBefore(text, i));
+            }
+            while (i > 0 && !Character.isWhitespace(Character.codePointBefore(text, i))) {
+                i -= Character.charCount(Character.codePointBefore(text, i));
+            }
+        }
+        return text.length() - i;
+    }
+
     /** Reverts the last slang substitution. Returns false if none is revertible. */
     public boolean undoSlang() {
         if (!undoAvailable()) return false;
@@ -422,15 +500,15 @@ public final class InputLogic {
         return here;
     }
 
-    /** Maps WIDE and STRIKE separators back to the ASCII forms TextUtils.getCapsMode expects. */
+    /** Maps WIDE, STRIKE and UNDERLINE separators back to the ASCII forms TextUtils.getCapsMode expects. */
     static String unstyleSeparators(CharSequence text) {
         StringBuilder out = new StringBuilder(text.length());
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (c == '̶') continue;
-            if (c == '　') {
+            if (c == '\u0336' || c == '\u0332') continue;
+            if (c == '\u3000') {
                 c = ' ';
-            } else if (c >= '！' && c <= '～') {
+            } else if (c >= '\uFF01' && c <= '\uFF5E') {
                 c = (char) (c - 0xFEE0);
             }
             out.append(c);
@@ -491,6 +569,7 @@ public final class InputLogic {
             undoRevert = style.apply(raw) + styledSep;
             undoOriginalWord = raw;
             undoSeparator = separator;
+            undoReplacement = style.apply(replacement);
             undoCursor = selEnd;
         }
     }
@@ -539,7 +618,7 @@ public final class InputLogic {
         }
         // ICU 58 (API 26-27) splits emoji ZWJ sequences whose first element carries VS16;
         // join clusters across a ZWJ that precedes a pictograph.
-        while (start > 0 && text.charAt(start - 1) == '‍'
+        while (start > 0 && text.charAt(start - 1) == '\u200D'
                 && Character.getType(text.codePointAt(start)) == Character.OTHER_SYMBOL) {
             int p = it.preceding(start);
             if (p == BreakIterator.DONE) break;
@@ -560,6 +639,7 @@ public final class InputLogic {
         undoRevert = null;
         undoOriginalWord = null;
         undoSeparator = null;
+        undoReplacement = null;
         undoCursor = -1;
     }
 

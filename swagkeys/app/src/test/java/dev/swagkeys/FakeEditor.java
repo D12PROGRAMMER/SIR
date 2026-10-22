@@ -158,6 +158,25 @@ final class FakeEditor implements Editor {
         changed();
     }
 
+    final List<Integer> keys = new ArrayList<>();
+
+    /** Arrow keys move the cursor one code point, collapsing any selection; other keys are logged. */
+    @Override
+    public void sendKey(int keyCode) {
+        keys.add(keyCode);
+        if (keyCode == InputLogic.KEYCODE_DPAD_LEFT) {
+            int to = selStart != selEnd ? selStart
+                    : selStart > 0 ? selStart - Character.charCount(text.codePointBefore(selStart)) : 0;
+            selStart = selEnd = to;
+            changed();
+        } else if (keyCode == InputLogic.KEYCODE_DPAD_RIGHT) {
+            int to = selStart != selEnd ? selEnd
+                    : selEnd < text.length() ? selEnd + Character.charCount(text.codePointAt(selEnd)) : selEnd;
+            selStart = selEnd = to;
+            changed();
+        }
+    }
+
     @Override
     public void sendKeyChar(char c) {
         compStart = compEnd = -1;

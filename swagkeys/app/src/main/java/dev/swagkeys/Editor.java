@@ -24,6 +24,9 @@ public interface Editor {
     /** Sends a KEYCODE_DEL down/up pair. */
     void sendDeleteKey();
 
+    /** Sends a down/up pair for {@code keyCode} (e.g. KEYCODE_DPAD_LEFT). */
+    void sendKey(int keyCode);
+
     /** Sends a character as key events where possible (for TYPE_NULL editors). */
     void sendKeyChar(char c);
 

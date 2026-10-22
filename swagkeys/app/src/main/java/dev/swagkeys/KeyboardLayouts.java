@@ -23,7 +23,8 @@ public final class KeyboardLayouts {
 
     private KeyboardLayouts() {}
 
-    public static List<Row> build(Mode mode, FieldConfig.Layout numpadVariant, Key enterKey) {
+    public static List<Row> build(Mode mode, FieldConfig.Layout numpadVariant, Key enterKey,
+            boolean numberRow) {
         switch (mode) {
             case SYMBOLS:
                 return symbols(enterKey);
@@ -33,23 +34,30 @@ public final class KeyboardLayouts {
                 return numpad(numpadVariant, enterKey);
             case LETTERS:
             default:
-                return letters(enterKey);
+                return letters(enterKey, numberRow);
         }
     }
 
-    private static List<Row> letters(Key enter) {
+    private static List<Row> letters(Key enter, boolean numberRow) {
         String top = "qwertyuiop";
         String digits = "1234567890";
         Key[] r1 = new Key[10];
-        for (int i = 0; i < 10; i++) r1[i] = Key.chrLong(top.charAt(i), digits.charAt(i), 1f);
-        return Arrays.asList(
+        for (int i = 0; i < 10; i++) {
+            // With a number row the digits have their own keys; no long-press hints needed.
+            r1[i] = numberRow ? Key.chr(top.charAt(i), 1f)
+                    : Key.chrLong(top.charAt(i), digits.charAt(i), 1f);
+        }
+        List<Row> rows = new ArrayList<>();
+        if (numberRow) rows.add(new Row(0f, chars(digits)));
+        rows.addAll(Arrays.asList(
                 new Row(0f, r1),
                 new Row(0.5f, chars("asdfghjkl")),
                 new Row(0f, concat(
                         new Key[] {Key.fn(Key.CODE_SHIFT, null, DotIcon.SHIFT, 1.5f, Key.Type.SHIFT)},
                         chars("zxcvbnm"),
                         new Key[] {Key.fn(Key.CODE_DELETE, null, DotIcon.DELETE, 1.5f, Key.Type.DELETE)})),
-                bottomRow("?123", Key.CODE_MODE_SYMBOLS, ',', '.', enter));
+                bottomRow("?123", Key.CODE_MODE_SYMBOLS, ',', '.', enter)));
+        return rows;
     }
 
     private static List<Row> symbols(Key enter) {

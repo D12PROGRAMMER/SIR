@@ -76,6 +76,24 @@ public final class DotIcon {
             "....##.",
             ".....##");
 
+    public static final DotIcon ARROW_LEFT = new DotIcon(
+            "...#.",
+            "..#..",
+            ".#...",
+            "#####",
+            ".#...",
+            "..#..",
+            "...#.");
+
+    public static final DotIcon ARROW_RIGHT = new DotIcon(
+            ".#...",
+            "..#..",
+            "...#.",
+            "#####",
+            "...#.",
+            "..#..",
+            ".#...");
+
     public static final DotIcon GLOBE = new DotIcon(
             "..###..",
             ".#.#.#.",

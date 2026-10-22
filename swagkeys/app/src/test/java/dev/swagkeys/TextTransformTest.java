@@ -53,6 +53,42 @@ public class TextTransformTest {
     }
 
     @Test
+    public void gothicMonoDouble() {
+        assertEquals("\uD835\uDD6C\uD835\uDD9F", TextStyle.GOTHIC.apply("Az"));
+        assertEquals("\uD835\uDE70\uD835\uDEA3\uD835\uDFF6", TextStyle.MONO.apply("Az0"));
+        // Double-struck capitals with BMP forms (C, H, N, P, Q, R, Z) use them.
+        assertEquals("\uD835\uDD38\u2102\u2124\uD835\uDD52\uD835\uDFD8", TextStyle.DOUBLE.apply("ACZa0"));
+    }
+
+    @Test
+    public void tinySquaredUnderline() {
+        assertEquals("\u1D57\u2071\u207F\u02B8\u00B9\u00B2\u207A", TextStyle.TINY.apply("TiNy12+"));
+        assertEquals("\uD83C\uDD30\uD83C\uDD49!", TextStyle.SQUARED.apply("aZ!"));
+        assertEquals("a\u0332b\u0332 c\u0332", TextStyle.UNDERLINE.apply("ab c"));
+        assertEquals("\u270C\uFE0F\u0332", TextStyle.UNDERLINE.apply("\u270C\uFE0F"));
+    }
+
+    @Test
+    public void spacedSeparatesLettersAndWidensSpaces() {
+        assertEquals("s p a c e d", TextStyle.SPACED.apply("spaced"));
+        assertEquals("h i   y o", TextStyle.SPACED.apply("hi yo"));
+        assertEquals("e\u0301 x", TextStyle.SPACED.apply("e\u0301x"));
+    }
+
+    @Test
+    public void cursedIsDeterministicAndKeepsBaseLetters() {
+        String a = TextStyle.CURSED.apply("hello");
+        assertEquals(a, TextStyle.CURSED.apply("hello"));
+        // Prefix property: restyling a growing composing word keeps earlier marks.
+        assertTrue(TextStyle.CURSED.apply("hello world").startsWith(a));
+        StringBuilder bases = new StringBuilder();
+        a.codePoints().filter(cp -> Character.getType(cp) != Character.NON_SPACING_MARK)
+                .forEach(bases::appendCodePoint);
+        assertEquals("hello", bases.toString());
+        assertEquals("!", TextStyle.CURSED.apply("!"));
+    }
+
+    @Test
     public void normalIsIdentity() {
         assertEquals("Héllo 👍", TextStyle.NORMAL.apply("Héllo 👍"));
     }
@@ -61,7 +97,8 @@ public class TextTransformTest {
     public void stylesPassThroughSupplementaryCodePoints() {
         for (TextStyle s : TextStyle.values()) {
             String out = s.apply("👍");
-            assertEquals(s.name(), "👍", s == TextStyle.STRIKE ? out.substring(0, 2) : out);
+            assertEquals(s.name(), "👍",
+                    s == TextStyle.STRIKE || s == TextStyle.UNDERLINE ? out.substring(0, 2) : out);
         }
     }
 

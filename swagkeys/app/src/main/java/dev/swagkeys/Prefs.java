@@ -20,6 +20,9 @@ public final class Prefs {
     public static final String KEY_HAPTICS = "haptics";
     public static final String KEY_SOUND = "sound";
     public static final String KEY_RECENT_EMOJI = "recent_emoji";
+    public static final String KEY_ACCENT = "accent";
+    public static final String KEY_NUMBER_ROW = "number_row";
+    public static final String KEY_ANIMATIONS = "animations";
 
     private static final int MAX_RECENT_EMOJI = 24;
 
@@ -104,6 +107,30 @@ public final class Prefs {
         list.add(0, emoji);
         while (list.size() > MAX_RECENT_EMOJI) list.remove(list.size() - 1);
         sp.edit().putString(KEY_RECENT_EMOJI, String.join("\n", list)).apply();
+    }
+
+    public String accent() {
+        return sp.getString(KEY_ACCENT, "red");
+    }
+
+    public void setAccent(String id) {
+        sp.edit().putString(KEY_ACCENT, id).apply();
+    }
+
+    public boolean numberRow() {
+        return sp.getBoolean(KEY_NUMBER_ROW, false);
+    }
+
+    public void setNumberRow(boolean on) {
+        sp.edit().putBoolean(KEY_NUMBER_ROW, on).apply();
+    }
+
+    public boolean animations() {
+        return sp.getBoolean(KEY_ANIMATIONS, true);
+    }
+
+    public void setAnimations(boolean on) {
+        sp.edit().putBoolean(KEY_ANIMATIONS, on).apply();
     }
 
     public boolean haptics() {

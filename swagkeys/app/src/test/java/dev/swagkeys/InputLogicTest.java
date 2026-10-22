@@ -487,6 +487,47 @@ public class InputLogicTest {
     }
 
     @Test
+    public void cursorMoveKeepsComposedWordAndMovesByArrowKeys() {
+        start("", FieldConfig.Mode.STYLED, true, TextStyle.LEET);
+        type("hello");
+        logic.moveCursor(-2);
+        editor.deliverUpdates();
+        assertEquals("h3ll0", editor.value());
+        assertNull(editor.composing());
+        assertEquals(3, editor.selStart);
+        type("x ");
+        assertEquals("h3lx l0", editor.value());
+        logic.moveCursor(10);
+        editor.deliverUpdates();
+        assertEquals(editor.value().length(), editor.selStart);
+    }
+
+    @Test
+    public void deleteWordsRemovesWholeWords() {
+        start("", FieldConfig.Mode.STYLED, false, TextStyle.NORMAL);
+        type("one two  three fou");
+        logic.deleteWords(1);           // the composing word
+        editor.deliverUpdates();
+        assertEquals("one two  three ", editor.value());
+        logic.deleteWords(2);
+        editor.deliverUpdates();
+        assertEquals("one ", editor.value());
+        logic.deleteWords(5);
+        editor.deliverUpdates();
+        assertEquals("", editor.value());
+        assertEquals(7, InputLogic.wordsBackLength("a 👍🏽👍 ", 1)); // UTF-16 units incl. space
+    }
+
+    @Test
+    public void undoReplacementReportsShownSlang() {
+        start("", FieldConfig.Mode.STYLED, true, TextStyle.BOLD);
+        type("cool ");
+        assertEquals("\uD835\uDC25\uD835\uDC22\uD835\uDC2D", logic.undoReplacement());
+        type("x");
+        assertNull(logic.undoReplacement());
+    }
+
+    @Test
     public void unknownInitialSelectionIsAdopted() {
         editor = new FakeEditor("abc");
         logic = new InputLogic(editor, null);

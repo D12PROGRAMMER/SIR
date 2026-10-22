@@ -120,7 +120,7 @@ public final class SettingsActivity extends Activity {
     // ---------------------------------------------------------------- UI construction
 
     private void build() {
-        palette = Palette.resolve(this, prefs.theme());
+        palette = Palette.resolve(this, prefs.theme()).withAccent(Palette.accentColor(prefs.accent()));
         headFont = Fonts.dotoBlack(this);
         bodyFont = Typeface.create("sans-serif", Typeface.NORMAL);
 
@@ -225,7 +225,32 @@ public final class SettingsActivity extends Activity {
         root.addView(themes);
 
         // Font
-        root.addView(header("05  FONT"));
+        root.addView(header("05  ACCENT"));
+        RadioGroup accents = new RadioGroup(this);
+        for (String[] a : Palette.ACCENTS) {
+            RadioButton rb = radio(a[1]);
+            rb.setId(View.generateViewId());
+            rb.setTag(a[0]);
+            GradientDrawable swatch = new GradientDrawable();
+            swatch.setShape(GradientDrawable.OVAL);
+            swatch.setColor(Palette.accentColor(a[0]));
+            swatch.setSize(dp(18), dp(18));
+            rb.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, swatch, null);
+            rb.setCompoundDrawablePadding(dp(12));
+            accents.addView(rb);
+            if (a[0].equals(prefs.accent())) rb.setChecked(true);
+        }
+        accents.setOnCheckedChangeListener((group, id) -> {
+            View v = group.findViewById(id);
+            if (v == null || !(v.getTag() instanceof String)) return;
+            String accent = (String) v.getTag();
+            if (accent.equals(prefs.accent())) return;
+            prefs.setAccent(accent);
+            recreate();
+        });
+        root.addView(accents);
+
+        root.addView(header("06  FONT"));
         root.addView(note(getString(R.string.font_note)));
         RadioGroup fonts = new RadioGroup(this);
         fontGroup = fonts;
@@ -256,12 +281,21 @@ public final class SettingsActivity extends Activity {
         });
 
         // Feedback
-        root.addView(header("06  FEEDBACK"));
+        root.addView(header("07  KEYBOARD"));
+        root.addView(toggle(getString(R.string.number_row), prefs.numberRow(),
+                (b, on) -> prefs.setNumberRow(on)));
+        root.addView(toggle(getString(R.string.animations), prefs.animations(),
+                (b, on) -> prefs.setAnimations(on)));
+        root.addView(note(getString(R.string.animations_note)));
+        root.addView(header("08  GESTURES"));
+        root.addView(note(getString(R.string.gestures_note)));
+
+        root.addView(header("09  FEEDBACK"));
         root.addView(toggle(getString(R.string.haptics), prefs.haptics(), (b, on) -> prefs.setHaptics(on)));
         root.addView(toggle(getString(R.string.sound), prefs.sound(), (b, on) -> prefs.setSound(on)));
 
         // Try it
-        root.addView(header("07  TRY IT"));
+        root.addView(header("10  TRY IT"));
         EditText field = new EditText(this);
         field.setHint(R.string.try_hint);
         field.setTextColor(palette.text);
@@ -276,7 +310,7 @@ public final class SettingsActivity extends Activity {
         root.addView(field, matchWrap(dp(8)));
 
         // Licenses
-        root.addView(header("08  CREDITS"));
+        root.addView(header("11  CREDITS"));
         root.addView(note(getString(R.string.credits)));
         TextView ofl = text(readAsset("fonts/OFL.txt"), 11, palette.textSecondary);
         ofl.setTypeface(Typeface.MONOSPACE);

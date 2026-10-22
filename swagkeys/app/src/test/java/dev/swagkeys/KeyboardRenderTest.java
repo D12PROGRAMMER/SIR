@@ -47,6 +47,8 @@ public class KeyboardRenderTest {
     private final List<Integer> keys = new ArrayList<>();
     private final List<TextStyle> stylesPicked = new ArrayList<>();
     private final List<String> emojis = new ArrayList<>();
+    private final List<Integer> cursorSteps = new ArrayList<>();
+    private final List<Integer> deletedWords = new ArrayList<>();
     private int slangToggles;
 
     @Before
@@ -61,6 +63,8 @@ public class KeyboardRenderTest {
             @Override public void onEmoji(String emoji) { emojis.add(emoji); }
             @Override public void onSpaceLongPress() { keys.add(-100); }
             @Override public void onSwitchKeyboard() { keys.add(-103); }
+            @Override public void onCursorMove(int steps) { cursorSteps.add(steps); }
+            @Override public void onDeleteWords(int words) { deletedWords.add(words); }
             @Override public void onStyleSelected(TextStyle style) { stylesPicked.add(style); }
             @Override public void onSlangToggle() { slangToggles++; }
             @Override public void onSuggestionTap() { keys.add(-101); }
@@ -243,10 +247,9 @@ public class KeyboardRenderTest {
         touch(MotionEvent.ACTION_DOWN, 0, chip);
         touch(MotionEvent.ACTION_UP, 0, chip);
         assertTrue(view.isStylePanelOpen());
-        // Second tile (L33T) lies in the first panel row, middle column.
-        Key w = find('w');
-        Key y = find('y');
-        float[][] tile = {{y.bounds.left, w.bounds.bottom}};
+        // Second tile (L33T): first panel row, second of five columns.
+        Key q = find('q');
+        float[][] tile = {{view.getWidth() * 0.3f, q.bounds.centerY()}};
         touch(MotionEvent.ACTION_DOWN, 0, tile);
         touch(MotionEvent.ACTION_UP, 0, tile);
         assertEquals(List.of(TextStyle.LEET), stylesPicked);
@@ -708,6 +711,110 @@ public class KeyboardRenderTest {
         hover(MotionEvent.ACTION_HOVER_ENTER, t[0], t[1]);
         hover(MotionEvent.ACTION_HOVER_EXIT, t[0], t[1]);
         assertEquals(List.of("👋🏻"), emojis);
+    }
+
+    @Test
+    public void spaceSwipeMovesCursorWithoutTypingSpace() throws IOException {
+        Key space = find(Key.CODE_SPACE);
+        float density = context.getResources().getDisplayMetrics().density;
+        float x = space.bounds.centerX();
+        float y = space.bounds.centerY();
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
+        for (int i = 1; i <= 10; i++) {
+            touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - i * 8 * density, y}});
+        }
+        shot("12_cursor_mode");
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 80 * density, y}});
+        int total = 0;
+        for (int s : cursorSteps) total += s;
+        assertTrue("steps " + cursorSteps, total <= -5 && total >= -8);
+        assertTrue(keys.isEmpty());
+    }
+
+    @Test
+    public void deleteSwipeLeftDeletesWords() throws IOException {
+        Key del = find(Key.CODE_DELETE);
+        float density = context.getResources().getDisplayMetrics().density;
+        float x = del.bounds.centerX();
+        float y = del.bounds.centerY();
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
+        assertEquals(List.of(Key.CODE_DELETE), keys);
+        for (int i = 1; i <= 12; i++) {
+            touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - i * 9 * density, y}});
+        }
+        ShadowLooper.idleMainLooper(200, java.util.concurrent.TimeUnit.MILLISECONDS);
+        shot("13_delete_words");
+        // No key repeat while selecting words.
+        ShadowLooper.idleMainLooper(600, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertEquals(List.of(Key.CODE_DELETE), keys);
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 108 * density, y}});
+        assertEquals(List.of(3), deletedWords);
+
+        // Sliding back to the key cancels.
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
+        touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - 60 * density, y}});
+        touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x - 2 * density, y}});
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x - 2 * density, y}});
+        assertEquals(List.of(3), deletedWords);
+    }
+
+    @Test
+    public void animationsRenderMidFlight() throws IOException {
+        view.setPalette(Palette.DARK.withAccent(Palette.accentColor("cyan")));
+        Key g = find('g');
+        float[][] p = {{g.bounds.centerX(), g.bounds.centerY()}};
+        touch(MotionEvent.ACTION_DOWN, 0, p);
+        ShadowLooper.idleMainLooper(60, java.util.concurrent.TimeUnit.MILLISECONDS);
+        touch(MotionEvent.ACTION_UP, 0, p);
+        Key j = find('j');
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{j.bounds.centerX(), j.bounds.centerY()}});
+        ShadowLooper.idleMainLooper(170, java.util.concurrent.TimeUnit.MILLISECONDS);
+        view.playSlangAnimation("goated");
+        ShadowLooper.idleMainLooper(150, java.util.concurrent.TimeUnit.MILLISECONDS);
+        shot("14_ripple_decode_cyan");
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{j.bounds.centerX(), j.bounds.centerY()}});
+        assertEquals(List.of((int) 'g', (int) 'j'), keys);
+        // Everything settles.
+        ShadowLooper.idleMainLooper(1500, java.util.concurrent.TimeUnit.MILLISECONDS);
+        shot("15_settled");
+    }
+
+    @Test
+    public void decodeFrameResolvesToTarget() {
+        assertEquals("goated", KeyboardView.decodeFrame("goated", 10_000));
+        String early = KeyboardView.decodeFrame("goated", 0);
+        assertEquals(6, early.length());
+        assertTrue(!early.equals("goated"));
+        assertEquals(early, KeyboardView.decodeFrame("goated", 0));
+        assertEquals("a b", KeyboardView.decodeFrame("a b", 1000));
+    }
+
+    @Test
+    public void numberRowAndAllStyles() throws IOException {
+        view.setNumberRow(true);
+        layout();
+        assertEquals(5, view.rows().size());
+        assertEquals('1', view.rows().get(0).keys.get(0).code);
+        shot("16_number_row");
+        view.setNumberRow(false);
+        float[][] chip = {{40f, 40f}};
+        touch(MotionEvent.ACTION_DOWN, 0, chip);
+        touch(MotionEvent.ACTION_UP, 0, chip);
+        ShadowLooper.idleMainLooper(400, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertTrue(view.isStylePanelOpen());
+        shot("17_all_styles");
+    }
+
+    @Test
+    public void animationsOffDrawsStatically() throws IOException {
+        view.setAnimations(false);
+        Key g = find('g');
+        float[][] p = {{g.bounds.centerX(), g.bounds.centerY()}};
+        touch(MotionEvent.ACTION_DOWN, 0, p);
+        touch(MotionEvent.ACTION_UP, 0, p);
+        view.playSlangAnimation("lit");
+        shot("18_animations_off");
+        assertEquals(List.of((int) 'g'), keys);
     }
 
     @Test

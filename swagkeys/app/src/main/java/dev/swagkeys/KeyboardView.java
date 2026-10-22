@@ -6,6 +6,7 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
@@ -56,6 +57,12 @@ public final class KeyboardView extends View {
 
         /** Long press on the emoji key: switch to the next input method. */
         void onSwitchKeyboard();
+
+        /** Space-bar swipe: move the cursor by {@code steps} characters (negative = left). */
+        void onCursorMove(int steps);
+
+        /** Swipe left from delete: delete the {@code words} words before the cursor. */
+        void onDeleteWords(int words);
 
         void onStyleSelected(TextStyle style);
 
@@ -109,6 +116,14 @@ public final class KeyboardView extends View {
         Runnable longPress;
         float lastX;
         float lastY;
+        float downX;
+        long downTime;
+        /** Space swipe in progress: x where the next cursor step is measured from. */
+        boolean cursorMode;
+        float cursorAnchorX;
+        /** Delete swipe in progress: number of words selected for deletion. */
+        boolean wordDelete;
+        int wordDeleteCount;
 
         Pointer(int id) {
             this.id = id;
@@ -215,6 +230,25 @@ public final class KeyboardView extends View {
     /** The hover gesture opened the popup: its lift must not type the hovered emoji. */
     private boolean hoverOpenedPopup;
 
+    // Animations (time-based; all drawn in onDraw)
+    private static final long RIPPLE_MS = 520;
+    private static final long KEY_RELEASE_MS = 180;
+    private static final long KEY_PRESS_MS = 70;
+    private static final long PREVIEW_POP_MS = 110;
+    private static final long PANEL_MS = 200;
+    private static final long SLANG_DECODE_MS = 900;
+    private static final long SWAG_PULSE_MS = 360;
+    private static final int MAX_RIPPLES = 6;
+    private static final String DECODE_GLYPHS = "#%&@$*+=?!<>/01";
+    private boolean animations = true;
+    private final List<float[]> ripples = new ArrayList<>();   // {x, y, startTime}
+    private final java.util.Map<Key, Long> keyReleases = new java.util.HashMap<>();
+    private long panelAnimStart = -1;
+    private String slangAnimText;
+    private long slangAnimStart = -1;
+    private boolean numberRow;
+    private float dotCell;
+
     // Touch
     private final SparseArray<Pointer> pointers = new SparseArray<>();
     private int stripPointerId = -1;
@@ -274,7 +308,7 @@ public final class KeyboardView extends View {
     }
 
     public void setPalette(Palette palette) {
-        if (this.palette == palette) return;
+        if (this.palette.equals(palette)) return;
         this.palette = palette;
         rebuildDotGrid();
         invalidate();
@@ -289,6 +323,36 @@ public final class KeyboardView extends View {
         this.uiFont = uiFont;
         computeGeometry();
         invalidate();
+    }
+
+    /** Enables or disables all animations (also off when the system disables animators). */
+    public void setAnimations(boolean on) {
+        animations = on;
+        if (!on) {
+            ripples.clear();
+            keyReleases.clear();
+            panelAnimStart = -1;
+            slangAnimStart = -1;
+        }
+        invalidate();
+    }
+
+    /** Shows a row of digits above the letters. */
+    public void setNumberRow(boolean on) {
+        if (numberRow == on) return;
+        numberRow = on;
+        cancelAllPointers();
+        rebuildLayout();
+        requestLayout();
+        notifyA11yLayoutChanged();
+    }
+
+    /** Plays the "decode" animation for a slang replacement that was just applied. */
+    public void playSlangAnimation(String replacement) {
+        if (!animations || replacement == null) return;
+        slangAnimText = replacement;
+        slangAnimStart = SystemClock.uptimeMillis();
+        postInvalidateOnAnimation();
     }
 
     public void setFeedback(boolean haptics, boolean sound) {
@@ -408,7 +472,7 @@ public final class KeyboardView extends View {
     }
 
     private void rebuildLayout() {
-        rows = KeyboardLayouts.build(mode, fieldLayout, enterKeyFor(enterAction, enterLabel));
+        rows = KeyboardLayouts.build(mode, fieldLayout, enterKeyFor(enterAction, enterLabel), numberRow);
         computeGeometry();
     }
 
@@ -475,8 +539,8 @@ public final class KeyboardView extends View {
         emojiCellW = emojiGridRect.width() / emojiCols;
         emojiCellH = Math.min(emojiCellW, rowHeight * 0.92f);
         if (emojiPanelOpen) buildEmojiCells();
-        // Style panel tiles: 3 columns, filling the key area.
-        int cols = 3;
+        // Style panel tiles: 5 columns (3 for up to 9 styles), filling the key area.
+        int cols = tileRects.length > 9 ? 5 : 3;
         int count = tileRects.length;
         int tileRows = (count + cols - 1) / cols;
         float areaH = (rows.size() * rowHeight);
@@ -498,6 +562,7 @@ public final class KeyboardView extends View {
 
     private void rebuildDotGrid() {
         int cell = Math.max(4, Math.round(12 * density));
+        dotCell = cell;
         Bitmap tile = Bitmap.createBitmap(cell, cell, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(tile);
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -510,22 +575,145 @@ public final class KeyboardView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
+        long now = SystemClock.uptimeMillis();
+        boolean animating = false;
         canvas.drawColor(palette.background);
         canvas.drawRect(0, 0, getWidth(), getHeight(), dotGridPaint);
-        drawStrip(canvas);
+        animating |= drawStrip(canvas, now);
+
+        // Panels and key layouts slide up and fade in when they appear.
+        int saved = -1;
+        if (animations && panelAnimStart >= 0) {
+            float t = (now - panelAnimStart) / (float) PANEL_MS;
+            if (t >= 1f) {
+                panelAnimStart = -1;
+            } else {
+                float e = easeOutCubic(Math.max(0f, t));
+                saved = canvas.saveLayerAlpha(0, keysTop, getWidth(), getHeight(),
+                        Math.round(255 * e));
+                canvas.translate(0, (1f - e) * 18 * density);
+                animating = true;
+            }
+        }
         if (stylePanelOpen) {
             drawStylePanel(canvas);
         } else if (emojiPanelOpen) {
             drawEmojiPanel(canvas);
         } else {
             for (KeyboardLayouts.Row row : rows) {
-                for (Key k : row.keys) drawKey(canvas, k, isPressed(k));
+                for (Key k : row.keys) {
+                    float scale = keyScale(k, now);
+                    if (scale != 1f) {
+                        animating = true;
+                        int c = canvas.save();
+                        canvas.scale(scale, scale, k.bounds.centerX(), k.bounds.centerY());
+                        drawKey(canvas, k, isPressed(k));
+                        canvas.restoreToCount(c);
+                    } else {
+                        drawKey(canvas, k, isPressed(k));
+                    }
+                }
             }
-            drawPreviews(canvas);
         }
+        if (saved >= 0) canvas.restoreToCount(saved);
+        animating |= drawRipples(canvas, now);
+        if (!stylePanelOpen && !emojiPanelOpen) animating |= drawPreviews(canvas, now);
+        if (animating) postInvalidateOnAnimation();
     }
 
-    private void drawStrip(Canvas canvas) {
+    private static float easeOutCubic(float t) {
+        float u = 1f - t;
+        return 1f - u * u * u;
+    }
+
+    /** Overshoots slightly past 1 before settling (easeOutBack). */
+    private static float easeOutBack(float t) {
+        float c1 = 1.70158f;
+        float c3 = c1 + 1f;
+        float u = t - 1f;
+        return 1f + c3 * u * u * u + c1 * u * u;
+    }
+
+    /** Pressed keys shrink; released keys spring back with a small overshoot. */
+    private float keyScale(Key k, long now) {
+        if (!animations) return 1f;
+        Pointer p = pointerOn(k);
+        if (p != null) {
+            float t = Math.min(1f, (now - p.downTime) / (float) KEY_PRESS_MS);
+            return 1f - 0.08f * easeOutCubic(Math.max(0f, t));
+        }
+        Long released = keyReleases.get(k);
+        if (released == null) return 1f;
+        float t = (now - released) / (float) KEY_RELEASE_MS;
+        if (t >= 1f) {
+            keyReleases.remove(k);
+            return 1f;
+        }
+        return 0.92f + 0.08f * easeOutBack(Math.max(0f, t));
+    }
+
+    private Pointer pointerOn(Key k) {
+        for (int i = 0; i < pointers.size(); i++) {
+            Pointer p = pointers.valueAt(i);
+            if (p.region == REGION_KEY && p.key == k) return p;
+        }
+        return null;
+    }
+
+    private void addRipple(float x, float y) {
+        if (!animations) return;
+        if (ripples.size() >= MAX_RIPPLES) ripples.remove(0);
+        ripples.add(new float[] {x, y, SystemClock.uptimeMillis()});
+    }
+
+    /**
+     * Glyph ripple: dots of the background grid light up in an expanding ring around the
+     * pressed key, drawn over the keys and fading out.
+     */
+    private boolean drawRipples(Canvas canvas, long now) {
+        if (ripples.isEmpty() || dotCell <= 0) return false;
+        float maxR = 150 * density;
+        float ringW = 20 * density;
+        float dotR = 1.6f * density;
+        int baseAlpha = Color.alpha(palette.accent);
+        for (int n = ripples.size() - 1; n >= 0; n--) {
+            float[] r = ripples.get(n);
+            float t = (now - (long) r[2]) / (float) RIPPLE_MS;
+            if (t >= 1f) {
+                ripples.remove(n);
+                continue;
+            }
+            t = Math.max(0f, t);
+            float radius = easeOutCubic(t) * maxR;
+            float fade = 1f - t;
+            float x0 = Math.max(0, r[0] - radius - ringW);
+            float x1 = Math.min(getWidth(), r[0] + radius + ringW);
+            float y0 = Math.max(0, r[1] - radius - ringW);
+            float y1 = Math.min(getHeight(), r[1] + radius + ringW);
+            int i0 = (int) Math.floor(x0 / dotCell);
+            int i1 = (int) Math.ceil(x1 / dotCell);
+            int j0 = (int) Math.floor(y0 / dotCell);
+            int j1 = (int) Math.ceil(y1 / dotCell);
+            for (int j = j0; j <= j1; j++) {
+                float cy = (j + 0.5f) * dotCell;
+                for (int i = i0; i <= i1; i++) {
+                    float cx = (i + 0.5f) * dotCell;
+                    float d = (float) Math.hypot(cx - r[0], cy - r[1]);
+                    float off = Math.abs(d - radius);
+                    if (off >= ringW) continue;
+                    float k = 1f - off / ringW;
+                    fill.setColor(palette.accent);
+                    fill.setAlpha(Math.round(baseAlpha * 0.85f * fade * k));
+                    canvas.drawCircle(cx, cy, dotR * (0.6f + 0.8f * k), fill);
+                }
+            }
+        }
+        fill.setAlpha(255);
+        return !ripples.isEmpty();
+    }
+
+    private boolean drawStrip(Canvas canvas, long now) {
+        boolean animating = false;
         float pillRadius = chipRect.height() / 2f;
         boolean chipPressed = isRegionPressed(REGION_CHIP);
 
@@ -548,10 +736,16 @@ public final class KeyboardView extends View {
                 chipRect.right - 8 * density - labelLeft, TextUtils.TruncateAt.END);
         canvas.drawText(fitted, 0, fitted.length(), labelLeft, baseline(chipRect.centerY()), text);
 
-        // Suggestion / undo
+        // Suggestion / undo; a slang replacement that just happened "decodes" in place first.
         String suggestion = null;
         int suggestionColor = palette.text;
-        if (undoWord != null) {
+        float decodeT = slangAnimStart < 0 ? 1f : (now - slangAnimStart) / (float) SLANG_DECODE_MS;
+        if (decodeT >= 1f) slangAnimStart = -1;
+        if (animations && decodeT < 1f && slangAnimText != null) {
+            suggestion = decodeFrame(slangAnimText, now - slangAnimStart);
+            suggestionColor = palette.accent;
+            animating = true;
+        } else if (undoWord != null) {
             suggestion = "UNDO: " + undoWord;
             suggestionColor = palette.textSecondary;
         } else if (pendingSlang != null) {
@@ -573,8 +767,16 @@ public final class KeyboardView extends View {
                     baseline(suggestionRect.centerY()), text);
         }
 
-        // SWAG toggle
+        // SWAG toggle (pulses when it replaces a word)
         boolean swagPressed = isRegionPressed(REGION_SWAG);
+        int swagSave = -1;
+        if (animations && slangAnimStart >= 0 && now - slangAnimStart < SWAG_PULSE_MS) {
+            float t = (now - slangAnimStart) / (float) SWAG_PULSE_MS;
+            float scale = 1f + 0.14f * (float) Math.sin(Math.PI * Math.max(0f, t));
+            swagSave = canvas.save();
+            canvas.scale(scale, scale, swagRect.centerX(), swagRect.centerY());
+            animating = true;
+        }
         if (slangOn && slangMode == SLANG_AUTO) {
             fill.setColor(swagPressed ? palette.keyPressed : palette.accent);
             canvas.drawRoundRect(swagRect, pillRadius, pillRadius, fill);
@@ -597,10 +799,35 @@ public final class KeyboardView extends View {
             canvas.drawRect(swagRect.left + 8 * density, swagRect.centerY() - 0.75f * density,
                     swagRect.right - 8 * density, swagRect.centerY() + 0.75f * density, fill);
         }
+        if (swagSave >= 0) canvas.restoreToCount(swagSave);
 
         // Settings
         fill.setColor(isRegionPressed(REGION_GEAR) ? palette.text : palette.textSecondary);
         DotIcon.GEAR.draw(canvas, gearRect.centerX(), gearRect.centerY(), stripHeight * 0.42f, fill);
+        return animating;
+    }
+
+    /**
+     * One frame of the decode effect: characters resolve left to right; unresolved positions
+     * cycle through glyph noise (deterministic per position and 40 ms frame).
+     */
+    static String decodeFrame(String target, long elapsedMs) {
+        StringBuilder out = new StringBuilder(target.length());
+        long frame = elapsedMs / 40;
+        int index = 0;
+        for (int i = 0; i < target.length(); ) {
+            int cp = target.codePointAt(i);
+            i += Character.charCount(cp);
+            long revealAt = 120 + index * 55L;
+            if (elapsedMs >= revealAt || Character.isWhitespace(cp)) {
+                out.appendCodePoint(cp);
+            } else {
+                int h = (int) ((index * 7919 + frame * 104729) ^ (frame >>> 3));
+                out.append(DECODE_GLYPHS.charAt(Math.floorMod(h, DECODE_GLYPHS.length())));
+            }
+            index++;
+        }
+        return out.toString();
     }
 
     private void drawKey(Canvas canvas, Key k, boolean pressed) {
@@ -650,6 +877,13 @@ public final class KeyboardView extends View {
             return;
         }
         text.setTextAlign(Paint.Align.CENTER);
+        if (k.type == Key.Type.SPACE && pointerOn(k) != null && pointerOn(k).cursorMode) {
+            fill.setColor(palette.accent);
+            float size = rowHeight * 0.32f;
+            DotIcon.ARROW_LEFT.draw(canvas, cx - size * 1.6f, cy, size, fill);
+            DotIcon.ARROW_RIGHT.draw(canvas, cx + size * 1.6f, cy, size, fill);
+            return;
+        }
         if (k.type == Key.Type.SPACE) {
             String label = stylesActive && style != TextStyle.NORMAL ? style.label : "SWAGKEYS";
             text.setTypeface(uiFont);
@@ -681,31 +915,52 @@ public final class KeyboardView extends View {
         canvas.drawText(k.label, cx, baseline(cy), text);
     }
 
-    private void drawPreviews(Canvas canvas) {
+    private boolean drawPreviews(Canvas canvas, long now) {
+        boolean animating = false;
         for (int i = 0; i < pointers.size(); i++) {
             Pointer p = pointers.valueAt(i);
-            if (p.region != REGION_KEY || p.key == null || p.key.type != Key.Type.CHAR) continue;
-            if (p.consumed && p.longPressShown == 0) continue;
-            int cp = p.longPressShown != 0 ? p.longPressShown : displayCode(p.key);
-            String glyph = new String(Character.toChars(cp));
-            if (stylesActive) glyph = style.apply(glyph);
+            if (p.region != REGION_KEY || p.key == null) continue;
+            String glyph;
+            boolean wordBubble = p.key.type == Key.Type.DELETE && p.wordDelete;
+            if (wordBubble) {
+                glyph = p.wordDeleteCount == 0 ? "\u00D7"
+                        : "-" + p.wordDeleteCount + (p.wordDeleteCount == 1 ? " WORD" : " WORDS");
+            } else {
+                if (p.key.type != Key.Type.CHAR) continue;
+                if (p.consumed && p.longPressShown == 0) continue;
+                int cp = p.longPressShown != 0 ? p.longPressShown : displayCode(p.key);
+                glyph = new String(Character.toChars(cp));
+                if (stylesActive) glyph = style.apply(glyph);
+            }
             Key k = p.key;
-            float w = Math.max(k.bounds.width() * 1.25f, rowHeight * 0.95f);
+            float w = wordBubble ? Math.max(k.bounds.width() * 1.6f, rowHeight * 2.4f)
+                    : Math.max(k.bounds.width() * 1.25f, rowHeight * 0.95f);
             float h = rowHeight * 1.3f;
             float left = Math.max(0, Math.min(getWidth() - w, k.bounds.centerX() - w / 2f));
             float top = Math.max(0, k.bounds.top - h + keyInsetV + 6 * density);
             tmp.set(left, top, left + w, top + h - 6 * density);
+            int c = canvas.save();
+            if (animations) {
+                // Pop in from the key: scale up with a slight overshoot.
+                float t = Math.min(1f, (now - p.downTime) / (float) PREVIEW_POP_MS);
+                if (t < 1f) animating = true;
+                float scale = 0.6f + 0.4f * easeOutBack(Math.max(0f, t));
+                canvas.scale(scale, scale, tmp.centerX(), tmp.bottom);
+            }
             fill.setColor(palette.keyPressed);
             canvas.drawRoundRect(tmp, radius, radius, fill);
             stroke.setColor(palette.accent);
             canvas.drawRoundRect(tmp, radius, radius, stroke);
-            text.setTypeface(keyFont);
+            text.setTypeface(wordBubble ? uiFont : keyFont);
             text.setTextAlign(Paint.Align.CENTER);
-            text.setColor(palette.text);
-            fitTextSize(glyph, tmp.width() - 8 * density, rowHeight * 0.62f);
+            text.setColor(wordBubble ? palette.accent : palette.text);
+            fitTextSize(glyph, tmp.width() - 12 * density, rowHeight * (wordBubble ? 0.36f : 0.62f));
             canvas.drawText(glyph, tmp.centerX(), baseline(tmp.centerY()), text);
+            canvas.restoreToCount(c);
         }
+        return animating;
     }
+
 
     private void drawStylePanel(Canvas canvas) {
         TextStyle[] styles = TextStyle.values();
@@ -978,8 +1233,13 @@ public final class KeyboardView extends View {
         Pointer p = new Pointer(id);
         p.region = REGION_KEY;
         p.key = key;
+        p.downX = x;
+        p.lastX = x;
+        p.downTime = SystemClock.uptimeMillis();
         pointers.put(id, p);
         feedback(key.code);
+        addRipple(key.bounds.centerX(), key.bounds.centerY());
+        if (animations) postInvalidateOnAnimation();
 
         switch (key.type) {
             case DELETE:
@@ -1048,6 +1308,14 @@ public final class KeyboardView extends View {
             if (t != p.tile) p.tile = t;
             return;
         }
+        if (p.region == REGION_KEY && p.key.type == Key.Type.SPACE) {
+            onSpaceMove(p, x);
+            return;
+        }
+        if (p.region == REGION_KEY && p.key.type == Key.Type.DELETE) {
+            onDeleteMove(p, x);
+            return;
+        }
         if (p.region != REGION_KEY || p.consumed || p.key.type != Key.Type.CHAR) return;
         Key k = keyAt(x, y);
         if (k != null && k != p.key && k.type == Key.Type.CHAR) {
@@ -1058,11 +1326,49 @@ public final class KeyboardView extends View {
         }
     }
 
+    /** Space-bar swipe: horizontal movement past slop moves the cursor in fixed steps. */
+    private void onSpaceMove(Pointer p, float x) {
+        float step = 10 * density;
+        if (!p.cursorMode) {
+            if (Math.abs(x - p.downX) <= touchSlop * 1.5f) return;
+            p.cursorMode = true;
+            p.consumed = true;
+            cancelLongPress(p);
+            p.cursorAnchorX = p.downX + Math.signum(x - p.downX) * touchSlop * 1.5f;
+        }
+        int steps = (int) ((x - p.cursorAnchorX) / step);
+        if (steps == 0) return;
+        p.cursorAnchorX += steps * step;
+        if (haptics) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+        if (listener != null) listener.onCursorMove(steps);
+    }
+
+    /** Swipe left from delete: every 36 dp selects one more word; moving back reduces it. */
+    private void onDeleteMove(Pointer p, float x) {
+        float start = touchSlop * 2f;
+        float dx = p.downX - x;
+        if (!p.wordDelete) {
+            if (dx <= start) return;
+            p.wordDelete = true;
+            stopRepeat();
+            p.downTime = SystemClock.uptimeMillis(); // pop the word bubble in
+        }
+        int count = dx <= start ? 0 : Math.min(20, 1 + (int) ((dx - start) / (36 * density)));
+        if (count != p.wordDeleteCount) {
+            p.wordDeleteCount = count;
+            if (haptics) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+        }
+    }
+
     private void onPointerUp(int id, float x, float y) {
         Pointer p = pointers.get(id);
         if (p == null) return;
         pointers.remove(id);
         cancelLongPress(p);
+        if (p.region == REGION_KEY && p.key != null && animations) {
+            keyReleases.put(p.key, SystemClock.uptimeMillis());
+            postInvalidateOnAnimation();
+        }
         if (id == stripPointerId) {
             stripPointerId = -1;
             if (p.region >= REGION_EMOJI) {
@@ -1078,6 +1384,9 @@ public final class KeyboardView extends View {
         }
         if (p.key.type == Key.Type.DELETE) {
             stopRepeat();
+            if (p.wordDelete && p.wordDeleteCount > 0 && listener != null) {
+                listener.onDeleteWords(p.wordDeleteCount);
+            }
             return;
         }
         if (p.key.type == Key.Type.SHIFT) {
@@ -1124,6 +1433,7 @@ public final class KeyboardView extends View {
         if (listener == null) return;
         switch (region) {
             case REGION_CHIP:
+                startPanelAnimation();
                 stylePanelOpen = !stylePanelOpen;
                 if (stylePanelOpen) emojiPanelOpen = false;
                 notifyA11yLayoutChanged();
@@ -1142,7 +1452,14 @@ public final class KeyboardView extends View {
         }
     }
 
+    private void startPanelAnimation() {
+        if (!animations) return;
+        panelAnimStart = SystemClock.uptimeMillis();
+        postInvalidateOnAnimation();
+    }
+
     private void selectStyle(int tile) {
+        startPanelAnimation();
         stylePanelOpen = false;
         notifyA11yLayoutChanged();
         if (listener != null) listener.onStyleSelected(TextStyle.values()[tile]);
@@ -1203,6 +1520,7 @@ public final class KeyboardView extends View {
     // ---------------------------------------------------------------- emoji panel
 
     private void openEmojiPanel() {
+        startPanelAnimation();
         cancelAllPointers();
         closeEmojiPopup();
         stylePanelOpen = false;
@@ -1215,6 +1533,7 @@ public final class KeyboardView extends View {
     }
 
     private void closeEmojiPanel() {
+        startPanelAnimation();
         cancelAllPointers();
         closeEmojiPopup();
         emojiPanelOpen = false;
