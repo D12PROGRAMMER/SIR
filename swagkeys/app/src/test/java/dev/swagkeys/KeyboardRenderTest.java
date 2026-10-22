@@ -46,6 +46,7 @@ public class KeyboardRenderTest {
     private KeyboardView view;
     private final List<Integer> keys = new ArrayList<>();
     private final List<TextStyle> stylesPicked = new ArrayList<>();
+    private final List<String> emojis = new ArrayList<>();
     private int slangToggles;
 
     @Before
@@ -57,13 +58,14 @@ public class KeyboardRenderTest {
         view.setFeedback(false, false);
         view.setListener(new KeyboardView.Listener() {
             @Override public void onKey(int code) { keys.add(code); }
+            @Override public void onEmoji(String emoji) { emojis.add(emoji); }
             @Override public void onSpaceLongPress() { keys.add(-100); }
             @Override public void onStyleSelected(TextStyle style) { stylesPicked.add(style); }
             @Override public void onSlangToggle() { slangToggles++; }
             @Override public void onSuggestionTap() { keys.add(-101); }
             @Override public void onOpenSettings() { keys.add(-102); }
         });
-        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_NONE, null, true);
+        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_NONE, null);
         layout();
     }
 
@@ -144,10 +146,10 @@ public class KeyboardRenderTest {
         tap(find(Key.CODE_MODE_SYMBOLS2));
         shot("04_symbols2");
 
-        view.setField(FieldConfig.Layout.PHONE, EditorInfo.IME_ACTION_DONE, null, false);
+        view.setField(FieldConfig.Layout.PHONE, EditorInfo.IME_ACTION_DONE, null);
         shot("05_phone");
 
-        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_SEARCH, null, false);
+        view.setField(FieldConfig.Layout.TEXT, EditorInfo.IME_ACTION_SEARCH, null);
         view.setStripState(TextStyle.BOLD, true, false, KeyboardView.SLANG_AUTO, null, null);
         Key e = find('e');
         touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{e.bounds.centerX(), e.bounds.centerY()}});
@@ -325,7 +327,7 @@ public class KeyboardRenderTest {
         AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
         AccessibilityNodeInfo host = provider.createAccessibilityNodeInfo(
                 AccessibilityNodeProvider.HOST_VIEW_ID);
-        // 10 + 9 + 9 + 6 keys (with globe) plus chip, SWAG and settings.
+        // 10 + 9 + 9 + 6 keys (with the emoji key) plus chip, SWAG and settings.
         assertEquals(34 + 3, host.getChildCount());
         AccessibilityNodeInfo q = provider.createAccessibilityNodeInfo(1000);
         assertEquals("q", q.getContentDescription().toString());
@@ -357,6 +359,78 @@ public class KeyboardRenderTest {
         ev.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         view.dispatchHoverEvent(ev);
         ev.recycle();
+    }
+
+    private void drag(float x, float fromY, float toY) {
+        int steps = 8;
+        touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, fromY}});
+        for (int i = 1; i <= steps; i++) {
+            float y = fromY + (toY - fromY) * i / steps;
+            touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x, y}});
+        }
+        touch(MotionEvent.ACTION_UP, 0, new float[][] {{x, toY}});
+    }
+
+    @Test
+    public void emojiKeyOpensPanelAndInsertsEmoji() throws IOException {
+        view.setRecentEmojis(List.of("😂", "🔥"));
+        Key emojiKey = find(Key.CODE_EMOJI);
+        assertNotNull(emojiKey);
+        tap(emojiKey);
+        assertTrue(view.isEmojiPanelOpen());
+        view.setPalette(Palette.DARK);
+        shot("08_emoji_panel");
+
+        // First cell of the grid is the most recent emoji.
+        Key q = find('q');
+        float[][] cell = {{q.bounds.left + 20, q.bounds.top + 20}};
+        touch(MotionEvent.ACTION_DOWN, 0, cell);
+        touch(MotionEvent.ACTION_UP, 0, cell);
+        assertEquals(List.of("😂"), emojis);
+
+        // Dragging scrolls instead of inserting.
+        float x = view.getWidth() / 2f;
+        drag(x, q.bounds.bottom + q.bounds.height(), q.bounds.top + 4);
+        assertEquals(1, emojis.size());
+        shot("09_emoji_scrolled");
+
+        // Delete in the panel emits delete; ABC returns to the letters.
+        float rowY = find(Key.CODE_SPACE).bounds.centerY();
+        float[][] del = {{view.getWidth() - 20f, rowY}};
+        touch(MotionEvent.ACTION_DOWN, 0, del);
+        touch(MotionEvent.ACTION_UP, 0, del);
+        assertEquals(List.of(Key.CODE_DELETE), keys);
+        float[][] abc = {{20f, rowY}};
+        touch(MotionEvent.ACTION_DOWN, 0, abc);
+        touch(MotionEvent.ACTION_UP, 0, abc);
+        assertTrue(!view.isEmojiPanelOpen());
+        assertNotNull(find('q'));
+    }
+
+    @Test
+    public void emojiTabsAndAccessibility() {
+        tap(find(Key.CODE_EMOJI));
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        AccessibilityNodeInfo host = provider.createAccessibilityNodeInfo(
+                AccessibilityNodeProvider.HOST_VIEW_ID);
+        assertTrue(host.isScrollable());
+        AccessibilityNodeInfo first = provider.createAccessibilityNodeInfo(100000);
+        assertEquals("😀", first.getContentDescription().toString());
+        assertTrue(provider.performAction(100000, AccessibilityNodeInfo.ACTION_CLICK, null));
+        assertEquals(List.of("😀"), emojis);
+        assertTrue(provider.performAction(AccessibilityNodeProvider.HOST_VIEW_ID,
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null));
+        // The first cell scrolled out of view, so its node is gone.
+        assertTrue(provider.createAccessibilityNodeInfo(100000) == null);
+        // Tab "Symbols" (last) scrolls to its section.
+        AccessibilityNodeInfo symbolsTab = provider.createAccessibilityNodeInfo(500 + 6);
+        assertEquals("Symbols", symbolsTab.getContentDescription().toString());
+        assertTrue(provider.performAction(500 + 6, AccessibilityNodeInfo.ACTION_CLICK, null));
+        ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        view.computeScroll();
+        ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        view.computeScroll();
+        assertTrue(provider.createAccessibilityNodeInfo(100000) == null);
     }
 
     @Test

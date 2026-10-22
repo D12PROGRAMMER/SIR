@@ -117,6 +117,10 @@ public class AndroidSmokeTest {
         assertEquals(TextStyle.BUBBLE, new Prefs(service).style());
         service.onSlangToggle();
         assertFalse(new Prefs(service).slang());
+        service.onEmoji("😂");
+        service.onEmoji("🔥");
+        service.onEmoji("😂");
+        assertEquals(java.util.List.of("😂", "🔥"), new Prefs(service).recentEmojis());
         service.onFinishInputView(true);
         service.onFinishInput();
         service.onDestroy();

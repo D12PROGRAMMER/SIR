@@ -78,9 +78,9 @@ public class TextTransformTest {
         assertEquals("WASSUP", SlangDictionary.lookup("HELLO"));
         assertEquals("Aight", SlangDictionary.lookup("Ok"));
         assertEquals("AIGHT", SlangDictionary.lookup("OK"));
-        assertEquals("'lit 🔥'", SlangDictionary.lookup("'cool'"));
-        assertEquals("💀", SlangDictionary.lookup("LOL"));
-        assertEquals("Chef's kiss 👌", SlangDictionary.lookup("Perfect"));
+        assertEquals("'lit'", SlangDictionary.lookup("'cool'"));
+        assertEquals("LMAO", SlangDictionary.lookup("LOL"));
+        assertEquals("Chef's kiss", SlangDictionary.lookup("Perfect"));
         assertNull(SlangDictionary.lookup("keyboard"));
         assertNull(SlangDictionary.lookup("''"));
         assertNull(SlangDictionary.lookup(""));
@@ -100,13 +100,13 @@ public class TextTransformTest {
             assertNull(w, SlangDictionary.lookup(w));
         }
         assertEquals("wiped", SlangDictionary.lookup("tired"));
-        assertEquals("funny 💀", SlangDictionary.lookup("funny"));
+        assertNull(SlangDictionary.lookup("funny"));
     }
 
     @Test
-    public void replacementsUseEmojiAvailableOnApi26() {
+    public void replacementsArePlainTextWithoutEmoji() {
         for (String v : SlangDictionary.entries().values()) {
-            v.codePoints().forEach(cp -> assertTrue(v, cp < 0x1F900));
+            v.codePoints().forEach(cp -> assertTrue(v, cp >= 0x20 && cp < 0x7F));
         }
     }
 

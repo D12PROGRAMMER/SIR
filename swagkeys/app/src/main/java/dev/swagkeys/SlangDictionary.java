@@ -9,8 +9,8 @@ import java.util.Map;
  * Single-word slang substitutions applied when a word is completed. Lookup is
  * case-insensitive; the replacement inherits the capitalization pattern of the typed word.
  * Entries are chosen so the replacement keeps the word's meaning and part of speech (no
- * homographs such as "lie", no function words such as "no"), and every emoji is Emoji 1.0 so it
- * renders on API 26.
+ * homographs such as "lie", no function words such as "no"). Replacements are plain text: emoji are
+ * only inserted from the emoji panel.
  */
 public final class SlangDictionary {
 
@@ -22,8 +22,8 @@ public final class SlangDictionary {
         m.put("hello", "wassup");
         m.put("hi", "yo");
         m.put("hey", "ayo");
-        m.put("goodbye", "peace out ✌️");
-        m.put("bye", "deuces ✌️");
+        m.put("goodbye", "peace out");
+        m.put("bye", "deuces");
         // People
         m.put("friend", "homie");
         m.put("friends", "homies");
@@ -37,16 +37,16 @@ public final class SlangDictionary {
         m.put("loser", "L");
         // Praise
         m.put("good", "bussin");
-        m.put("great", "fire 🔥");
-        m.put("cool", "lit 🔥");
+        m.put("great", "fire");
+        m.put("cool", "lit");
         m.put("awesome", "fire");
-        m.put("amazing", "goated 🐐");
+        m.put("amazing", "goated");
         m.put("excellent", "elite");
-        m.put("best", "GOAT 🐐");
+        m.put("best", "GOAT");
         m.put("delicious", "bussin");
         m.put("tasty", "bussin");
         m.put("nice", "clean");
-        m.put("perfect", "chef's kiss 👌");
+        m.put("perfect", "chef's kiss");
         m.put("stylish", "drippy");
         m.put("fashionable", "drippy");
         m.put("beautiful", "stunning fr");
@@ -86,16 +86,14 @@ public final class SlangDictionary {
         m.put("excited", "hyped");
         m.put("tired", "wiped");
         m.put("exhausted", "cooked");
-        m.put("funny", "funny 💀");
-        m.put("hilarious", "hilarious 💀");
-        m.put("lol", "💀");
+        m.put("lol", "lmao");
         m.put("crazy", "wild");
         m.put("wow", "sheesh");
         m.put("relax", "chill");
         m.put("calm", "chill");
         m.put("shocked", "shook");
         // Things
-        m.put("money", "bands 💸");
+        m.put("money", "bands");
         m.put("cash", "bread");
         m.put("house", "crib");
         m.put("car", "whip");
@@ -105,9 +103,9 @@ public final class SlangDictionary {
         m.put("clothes", "drip");
         m.put("party", "function");
         m.put("food", "grub");
-        m.put("gossip", "tea ☕");
-        m.put("drama", "tea ☕");
-        m.put("rumor", "tea ☕");
+        m.put("gossip", "tea");
+        m.put("drama", "tea");
+        m.put("rumor", "tea");
         // Actions / misc
         m.put("leave", "dip");
         m.put("leaving", "dipping");

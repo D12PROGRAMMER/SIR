@@ -40,7 +40,7 @@ public class InputLogicTest {
     public void slangReplacesCompletedWords() {
         start("", FieldConfig.Mode.STYLED, true, TextStyle.NORMAL);
         type("hello friend this is so cool ");
-        assertEquals("wassup homie this is so lit 🔥 ", editor.value());
+        assertEquals("wassup homie this is so lit ", editor.value());
     }
 
     @Test
@@ -88,7 +88,7 @@ public class InputLogicTest {
     public void deleteRightAfterSlangRevertsIt() {
         start("", FieldConfig.Mode.STYLED, true, TextStyle.NORMAL);
         type("so cool ");
-        assertEquals("so lit 🔥 ", editor.value());
+        assertEquals("so lit ", editor.value());
         assertEquals("cool", logic.undoableWord());
         logic.onDelete();
         editor.deliverUpdates();
@@ -238,7 +238,7 @@ public class InputLogicTest {
     public void apostrophesStayInsideWords() {
         start("", FieldConfig.Mode.STYLED, true, TextStyle.NORMAL);
         type("don't 'cool' ");
-        assertEquals("don't 'lit 🔥' ", editor.value());
+        assertEquals("don't 'lit' ", editor.value());
     }
 
     @Test
@@ -395,7 +395,7 @@ public class InputLogicTest {
 
         start("", FieldConfig.Mode.STYLED, true, TextStyle.NORMAL);
         type("Hi. Cool, ");
-        assertEquals("Yo. Lit 🔥, ", editor.value());
+        assertEquals("Yo. Lit, ", editor.value());
     }
 
     @Test
@@ -406,10 +406,10 @@ public class InputLogicTest {
         type("best car ");
         assertEquals("best car ", editor.value());
         type("cool");
-        assertEquals("lit 🔥", logic.pendingSlang());
+        assertEquals("lit", logic.pendingSlang());
         logic.pickSlang();
         editor.deliverUpdates();
-        assertEquals("best car lit 🔥", editor.value());
+        assertEquals("best car lit", editor.value());
     }
 
     @Test
@@ -444,6 +444,46 @@ public class InputLogicTest {
         assertEquals(1, InputLogic.lastGraphemeLength("ab"));
         // Devanagari conjunct with ZWJ: the platform deletes the last letter only.
         assertEquals(1, InputLogic.lastGraphemeLength("क्‍ष"));
+    }
+
+    @Test
+    public void emojiEndsWordUnstyled() {
+        start("", FieldConfig.Mode.STYLED, true, TextStyle.BOLD);
+        type("cool");
+        logic.onEmoji("😂");
+        editor.deliverUpdates();
+        assertEquals("𝐥𝐢𝐭😂", editor.value());
+        // Delete right after reverts the slang, keeping the emoji.
+        logic.onDelete();
+        editor.deliverUpdates();
+        assertEquals("𝐜𝐨𝐨𝐥😂", editor.value());
+
+        start("", FieldConfig.Mode.STYLED, false, TextStyle.STRIKE);
+        logic.onEmoji("❤️");
+        editor.deliverUpdates();
+        assertEquals("❤️", editor.value());
+    }
+
+    @Test
+    public void emojiAfterPickedSlangGetsTheOwedSpace() {
+        start("", FieldConfig.Mode.STYLED, true, TextStyle.NORMAL);
+        type("hello");
+        logic.pickSlang();
+        editor.deliverUpdates();
+        logic.onEmoji("👋");
+        editor.deliverUpdates();
+        assertEquals("wassup 👋", editor.value());
+    }
+
+    @Test
+    public void emojiInPlainAndRawFields() {
+        start("ab", FieldConfig.Mode.PLAIN, false, TextStyle.LEET);
+        logic.onEmoji("🔥");
+        editor.deliverUpdates();
+        assertEquals("ab🔥", editor.value());
+        start("", FieldConfig.Mode.RAW, false, TextStyle.NORMAL);
+        logic.onEmoji("🔥");
+        assertEquals("🔥", editor.value());
     }
 
     @Test

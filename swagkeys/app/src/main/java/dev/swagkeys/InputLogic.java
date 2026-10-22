@@ -215,6 +215,31 @@ public final class InputLogic {
         }
     }
 
+    /**
+     * Inserts an emoji from the picker. It is committed unstyled and ends the current word the
+     * way punctuation does (slang applies to that word).
+     */
+    public void onEmoji(String emoji) {
+        switch (config.mode) {
+            case RAW:
+                editor.commitText(emoji);
+                selStart = selEnd = -1;
+                break;
+            case PLAIN:
+                commitPlain(emoji);
+                break;
+            case STYLED:
+                if (word.length() == 0 && consumePhantomSpace()) {
+                    clearUndo();
+                    commitWord(Slang.NONE, " ");
+                }
+                clearUndo();
+                commitWord(Slang.AUTO, emoji, false);
+                break;
+        }
+        notifyChanged();
+    }
+
     public void onEnter() {
         phantomSpaceAt = -1;
         if (config.enterIsAction) {
@@ -442,6 +467,10 @@ public final class InputLogic {
      * {@code separator}, both styled, replacing the composing region or the selection.
      */
     private void commitWord(Slang slang, String separator) {
+        commitWord(slang, separator, true);
+    }
+
+    private void commitWord(Slang slang, String separator, boolean styleSeparator) {
         String raw = word.toString();
         String replacement = null;
         if (!raw.isEmpty() && !wordAttached
@@ -449,7 +478,7 @@ public final class InputLogic {
                         : slang == Slang.AUTO && slangAutoActive())) {
             replacement = SlangDictionary.lookup(raw);
         }
-        String styledSep = style.apply(separator);
+        String styledSep = styleSeparator ? style.apply(separator) : separator;
         String text = style.apply(replacement != null ? replacement : raw) + styledSep;
         int base = composingStart >= 0 ? composingStart : selStart;
         editor.commitText(text);

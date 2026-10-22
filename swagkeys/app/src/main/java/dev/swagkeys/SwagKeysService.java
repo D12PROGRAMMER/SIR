@@ -6,7 +6,6 @@ import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.inputmethodservice.InputMethodService;
 import android.os.Build;
-import android.os.IBinder;
 import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
@@ -78,7 +77,8 @@ public final class SwagKeysService extends InputMethodService
         if (keyboard == null) return;
         applyAppearance();
         FieldConfig config = logic.config();
-        keyboard.setField(config.layout, config.enterKeyAction, config.enterLabel, offerGlobeKey());
+        keyboard.setRecentEmojis(prefs.recentEmojis());
+        keyboard.setField(config.layout, config.enterKeyAction, config.enterLabel);
         onInputStateChanged();
     }
 
@@ -173,21 +173,6 @@ public final class SwagKeysService extends InputMethodService
         }
     }
 
-    private IBinder windowToken() {
-        Window window = getWindow() == null ? null : getWindow().getWindow();
-        return window == null ? null : window.getAttributes().token;
-    }
-
-    @SuppressWarnings("deprecation")
-    private boolean offerGlobeKey() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            return shouldOfferSwitchingToNextInputMethod();
-        }
-        IBinder token = windowToken();
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        return token != null && imm != null && imm.shouldOfferSwitchingToNextInputMethod(token);
-    }
-
     // ---------------------------------------------------------------- InputLogic.Listener
 
     @Override
@@ -203,7 +188,6 @@ public final class SwagKeysService extends InputMethodService
     // ---------------------------------------------------------------- KeyboardView.Listener
 
     @Override
-    @SuppressWarnings("deprecation")
     public void onKey(int code) {
         switch (code) {
             case Key.CODE_DELETE:
@@ -212,20 +196,17 @@ public final class SwagKeysService extends InputMethodService
             case Key.CODE_ENTER:
                 logic.onEnter();
                 break;
-            case Key.CODE_GLOBE:
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    switchToNextInputMethod(false);
-                } else {
-                    IBinder token = windowToken();
-                    InputMethodManager imm =
-                            (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-                    if (token != null && imm != null) imm.switchToNextInputMethod(token, false);
-                }
-                break;
             default:
                 if (code > 0) logic.onCodePoint(code);
                 break;
         }
+    }
+
+    @Override
+    public void onEmoji(String emoji) {
+        logic.onEmoji(emoji);
+        prefs.addRecentEmoji(emoji);
+        if (keyboard != null) keyboard.setRecentEmojis(prefs.recentEmojis());
     }
 
     @Override

@@ -6,6 +6,8 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -22,7 +24,9 @@ import android.text.TextUtils;
 import android.util.SparseArray;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewParent;
 import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityEvent;
@@ -30,7 +34,9 @@ import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.EditorInfo;
+import android.widget.OverScroller;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -40,8 +46,11 @@ import java.util.List;
 public final class KeyboardView extends View {
 
     public interface Listener {
-        /** A code point, or {@link Key#CODE_DELETE}, {@link Key#CODE_ENTER}, {@link Key#CODE_GLOBE}. */
+        /** A code point, or {@link Key#CODE_DELETE} or {@link Key#CODE_ENTER}. */
         void onKey(int code);
+
+        /** An emoji (one or more code points) picked in the emoji panel. */
+        void onEmoji(String emoji);
 
         void onSpaceLongPress();
 
@@ -75,6 +84,12 @@ public final class KeyboardView extends View {
     private static final int REGION_SWAG = 4;
     private static final int REGION_GEAR = 5;
     private static final int REGION_TILE = 6;
+    private static final int REGION_EMOJI = 7;
+    private static final int REGION_EMOJI_TAB = 8;
+    private static final int REGION_EMOJI_ABC = 9;
+    private static final int REGION_EMOJI_DEL = 10;
+
+    private static final String RECENT_EMOJI_ICON = "\uD83D\uDD58"; // U+1F558 clock face nine
 
     private static final String PANEL_SAMPLE = "swag";
 
@@ -116,7 +131,6 @@ public final class KeyboardView extends View {
     // Layout state
     private KeyboardLayouts.Mode mode = KeyboardLayouts.Mode.LETTERS;
     private FieldConfig.Layout fieldLayout = FieldConfig.Layout.TEXT;
-    private boolean showGlobe;
     private int enterAction = EditorInfo.IME_ACTION_NONE;
     private String enterLabel;
     private List<KeyboardLayouts.Row> rows;
@@ -149,6 +163,32 @@ public final class KeyboardView extends View {
     private final RectF gearRect = new RectF();
     private final RectF[] tileRects = new RectF[TextStyle.values().length];
 
+    // Emoji panel: sections laid out as one vertically scrolling grid, a tab per section.
+    private boolean emojiPanelOpen;
+    private List<String> recentEmojis = new ArrayList<>();
+    /** Grid cells; each section is padded with nulls to whole rows. */
+    private final List<String> emojiCells = new ArrayList<>();
+    private final List<String> emojiTabIcons = new ArrayList<>();
+    private final List<Integer> emojiTabNames = new ArrayList<>();
+    private final List<Integer> emojiTabRows = new ArrayList<>();
+    private final List<RectF> emojiTabRects = new ArrayList<>();
+    private final RectF emojiGridRect = new RectF();
+    private final Key emojiAbcKey = Key.fn(Key.CODE_MODE_ALPHA, "ABC", null, 1.5f, Key.Type.FUNCTION);
+    private final Key emojiDelKey = Key.fn(Key.CODE_DELETE, null, DotIcon.DELETE, 1.5f, Key.Type.DELETE);
+    private int emojiCols = 8;
+    private float emojiCellW = 1;
+    private float emojiCellH = 1;
+    private float emojiScrollY;
+    private final OverScroller emojiScroller;
+    private VelocityTracker emojiVelocity;
+    private boolean emojiDragging;
+    private float emojiDownY;
+    private float emojiLastY;
+    private final int touchSlop;
+    private final int minFlingVelocity;
+    private final int maxFlingVelocity;
+    private final ColorMatrixColorFilter greyscale;
+
     // Touch
     private final SparseArray<Pointer> pointers = new SparseArray<>();
     private int stripPointerId = -1;
@@ -165,6 +205,14 @@ public final class KeyboardView extends View {
         super(context);
         density = context.getResources().getDisplayMetrics().density;
         audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        ViewConfiguration vc = ViewConfiguration.get(context);
+        touchSlop = vc.getScaledTouchSlop();
+        minFlingVelocity = vc.getScaledMinimumFlingVelocity();
+        maxFlingVelocity = vc.getScaledMaximumFlingVelocity();
+        emojiScroller = new OverScroller(context);
+        ColorMatrix desaturate = new ColorMatrix();
+        desaturate.setSaturation(0f);
+        greyscale = new ColorMatrixColorFilter(desaturate);
         stroke.setStyle(Paint.Style.STROKE);
         stroke.setStrokeWidth(1.5f * density);
         text.setTextAlign(Paint.Align.CENTER);
@@ -223,13 +271,12 @@ public final class KeyboardView extends View {
     }
 
     /** Configures the layout for a newly focused field. */
-    public void setField(FieldConfig.Layout layout, int enterAction, String enterLabel,
-            boolean showGlobe) {
+    public void setField(FieldConfig.Layout layout, int enterAction, String enterLabel) {
         cancelAllPointers();
         this.fieldLayout = layout;
         this.enterAction = enterAction;
         this.enterLabel = enterLabel;
-        this.showGlobe = showGlobe;
+        this.emojiPanelOpen = false;
         this.mode = layout == FieldConfig.Layout.TEXT
                 ? KeyboardLayouts.Mode.LETTERS : KeyboardLayouts.Mode.NUMPAD;
         this.stylePanelOpen = false;
@@ -251,6 +298,18 @@ public final class KeyboardView extends View {
         this.pendingSlang = pendingSlang;
         this.undoWord = undoWord;
         invalidate();
+    }
+
+    /**
+     * Sets the recently used emoji (most recent first). An open panel keeps its layout so the
+     * grid does not shift under the finger; the list is applied when the panel is next opened.
+     */
+    public void setRecentEmojis(List<String> recent) {
+        recentEmojis = new ArrayList<>(recent);
+    }
+
+    public boolean isEmojiPanelOpen() {
+        return emojiPanelOpen;
     }
 
     /** Requests (or withdraws) automatic capitalization of the next letter. */
@@ -275,6 +334,8 @@ public final class KeyboardView extends View {
     public void reset() {
         cancelAllPointers();
         stylePanelOpen = false;
+        emojiPanelOpen = false;
+        emojiScroller.forceFinished(true);
         invalidate();
     }
 
@@ -319,7 +380,7 @@ public final class KeyboardView extends View {
     }
 
     private void rebuildLayout() {
-        rows = KeyboardLayouts.build(mode, fieldLayout, showGlobe, enterKeyFor(enterAction, enterLabel));
+        rows = KeyboardLayouts.build(mode, fieldLayout, enterKeyFor(enterAction, enterLabel));
         computeGeometry();
     }
 
@@ -376,6 +437,16 @@ public final class KeyboardView extends View {
                 padH + 6 * density + chipW, stripMid + pillH / 2f);
         suggestionRect.set(chipRect.right + 8 * density, padTop,
                 swagRect.left - 8 * density, padTop + stripHeight);
+        // Emoji panel: grid over the first rows, bottom row = ABC, category tabs, delete.
+        float areaBottom = keysTop + rows.size() * rowHeight;
+        float barTop = areaBottom - rowHeight;
+        emojiGridRect.set(padH, keysTop, width - padH, barTop);
+        emojiAbcKey.bounds.set(padH, barTop, padH + 1.5f * unit, areaBottom);
+        emojiDelKey.bounds.set(width - padH - 1.5f * unit, barTop, width - padH, areaBottom);
+        emojiCols = Math.max(6, (int) (emojiGridRect.width() / (46 * density)));
+        emojiCellW = emojiGridRect.width() / emojiCols;
+        emojiCellH = Math.min(emojiCellW, rowHeight * 0.92f);
+        if (emojiPanelOpen) buildEmojiCells();
         // Style panel tiles: 3 columns, filling the key area.
         int cols = 3;
         int count = tileRects.length;
@@ -416,6 +487,8 @@ public final class KeyboardView extends View {
         drawStrip(canvas);
         if (stylePanelOpen) {
             drawStylePanel(canvas);
+        } else if (emojiPanelOpen) {
+            drawEmojiPanel(canvas);
         } else {
             for (KeyboardLayouts.Row row : rows) {
                 for (Key k : row.keys) drawKey(canvas, k, isPressed(k));
@@ -627,6 +700,67 @@ public final class KeyboardView extends View {
         }
     }
 
+    private void drawEmojiPanel(Canvas canvas) {
+        Pointer pressed = stripPointerId >= 0 ? pointers.get(stripPointerId) : null;
+        int pressedRegion = pressed == null ? REGION_NONE : pressed.region;
+        int pressedIndex = pressed == null ? -1 : pressed.tile;
+
+        canvas.save();
+        canvas.clipRect(emojiGridRect);
+        text.setTypeface(Typeface.DEFAULT);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setColor(palette.text);
+        text.setTextSize(emojiCellH * 0.6f);
+        int firstRow = Math.max(0, (int) (emojiScrollY / emojiCellH));
+        int lastRow = (int) ((emojiScrollY + emojiGridRect.height()) / emojiCellH);
+        for (int row = firstRow; row <= lastRow; row++) {
+            for (int col = 0; col < emojiCols; col++) {
+                int idx = row * emojiCols + col;
+                if (idx >= emojiCells.size()) break;
+                String e = emojiCells.get(idx);
+                if (e == null) continue;
+                float left = emojiGridRect.left + col * emojiCellW;
+                float top = emojiGridRect.top + row * emojiCellH - emojiScrollY;
+                if (pressedRegion == REGION_EMOJI && pressedIndex == idx && !emojiDragging) {
+                    tmp.set(left + 2 * density, top + 2 * density,
+                            left + emojiCellW - 2 * density, top + emojiCellH - 2 * density);
+                    fill.setColor(palette.keyPressed);
+                    canvas.drawRoundRect(tmp, radius, radius, fill);
+                }
+                canvas.drawText(e, left + emojiCellW / 2f, baseline(top + emojiCellH / 2f), text);
+            }
+        }
+        canvas.restore();
+
+        drawKey(canvas, emojiAbcKey, pressedRegion == REGION_EMOJI_ABC);
+        drawKey(canvas, emojiDelKey, pressedRegion == REGION_EMOJI_DEL);
+
+        int current = currentEmojiTab();
+        text.setTypeface(Typeface.DEFAULT);
+        text.setTextAlign(Paint.Align.CENTER);
+        for (int i = 0; i < emojiTabRects.size(); i++) {
+            RectF r = emojiTabRects.get(i);
+            boolean selected = i == current;
+            if (pressedRegion == REGION_EMOJI_TAB && pressedIndex == i) {
+                tmp.set(r.left + keyInsetH, r.top + keyInsetV, r.right - keyInsetH, r.bottom - keyInsetV);
+                fill.setColor(palette.keyPressed);
+                canvas.drawRoundRect(tmp, radius, radius, fill);
+            }
+            // Unselected tabs are drawn in greyscale, the selected one in color with a red dot.
+            text.setColorFilter(selected ? null : greyscale);
+            text.setColor(palette.text);
+            text.setAlpha(selected ? 255 : 150);
+            text.setTextSize(Math.min(r.height() * 0.4f, r.width() * 0.62f));
+            canvas.drawText(emojiTabIcons.get(i), r.centerX(), baseline(r.centerY() - 2 * density), text);
+            if (selected) {
+                fill.setColor(palette.accent);
+                canvas.drawCircle(r.centerX(), r.bottom - keyInsetV - 4 * density, 2.5f * density, fill);
+            }
+        }
+        text.setColorFilter(null);
+        text.setAlpha(255);
+    }
+
     private void fitTextSize(String s, float maxWidth, float preferred) {
         text.setTextSize(preferred);
         float w = text.measureText(s);
@@ -663,6 +797,7 @@ public final class KeyboardView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
         int action = ev.getActionMasked();
+        if (emojiVelocity != null && emojiPanelOpen) emojiVelocity.addMovement(ev);
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN: {
@@ -731,6 +866,10 @@ public final class KeyboardView extends View {
 
     private void onPointerDown(int id, float x, float y) {
         if (y >= keysBottom()) return;
+        if (emojiPanelOpen && y >= keysTop) {
+            onEmojiPointerDown(id, x, y);
+            return;
+        }
         if (y < keysTop || stylePanelOpen) {
             // Strip and style panel accept a single pointer at a time.
             if (pointers.size() > 0) return;
@@ -806,6 +945,18 @@ public final class KeyboardView extends View {
     private void onPointerMove(int id, float x, float y) {
         Pointer p = pointers.get(id);
         if (p == null) return;
+        if (p.region == REGION_EMOJI) {
+            if (!emojiDragging && Math.abs(y - emojiDownY) > touchSlop) {
+                emojiDragging = true;
+                emojiLastY = y;
+            }
+            if (emojiDragging) {
+                emojiScrollY += emojiLastY - y;
+                clampEmojiScroll();
+                emojiLastY = y;
+            }
+            return;
+        }
         if (p.region == REGION_TILE) {
             int t = tileAt(x, y);
             if (t != p.tile) p.tile = t;
@@ -828,7 +979,9 @@ public final class KeyboardView extends View {
         cancelLongPress(p);
         if (id == stripPointerId) {
             stripPointerId = -1;
-            if (p.region == REGION_TILE) {
+            if (p.region >= REGION_EMOJI) {
+                onEmojiPointerUp(p, x, y);
+            } else if (p.region == REGION_TILE) {
                 if (p.tile >= 0 && p.tile == tileAt(x, y)) {
                     selectStyle(p.tile);
                 }
@@ -886,6 +1039,7 @@ public final class KeyboardView extends View {
         switch (region) {
             case REGION_CHIP:
                 stylePanelOpen = !stylePanelOpen;
+                if (stylePanelOpen) emojiPanelOpen = false;
                 notifyA11yLayoutChanged();
                 break;
             case REGION_SUGGESTION:
@@ -919,8 +1073,8 @@ public final class KeyboardView extends View {
             case Key.CODE_MODE_ALPHA:
                 switchMode(KeyboardLayouts.Mode.LETTERS);
                 break;
-            case Key.CODE_GLOBE:
-                emit(Key.CODE_GLOBE);
+            case Key.CODE_EMOJI:
+                openEmojiPanel();
                 break;
             default:
                 break;
@@ -958,6 +1112,189 @@ public final class KeyboardView extends View {
 
     private void emit(int code) {
         if (listener != null) listener.onKey(code);
+    }
+
+    // ---------------------------------------------------------------- emoji panel
+
+    private void openEmojiPanel() {
+        cancelAllPointers();
+        stylePanelOpen = false;
+        emojiPanelOpen = true;
+        emojiScroller.forceFinished(true);
+        emojiScrollY = 0;
+        buildEmojiCells();
+        notifyA11yLayoutChanged();
+        invalidate();
+    }
+
+    private void closeEmojiPanel() {
+        cancelAllPointers();
+        emojiPanelOpen = false;
+        emojiScroller.forceFinished(true);
+        applyAutoCaps();
+        notifyA11yLayoutChanged();
+        invalidate();
+    }
+
+    private void buildEmojiCells() {
+        emojiCells.clear();
+        emojiTabIcons.clear();
+        emojiTabNames.clear();
+        emojiTabRows.clear();
+        if (!recentEmojis.isEmpty()) {
+            addEmojiSection(RECENT_EMOJI_ICON, R.string.a11y_emoji_recent, recentEmojis);
+        }
+        for (EmojiData.Category c : EmojiData.categories()) {
+            addEmojiSection(c.icon, c.nameRes, c.emojis);
+        }
+        emojiTabRects.clear();
+        float left = emojiAbcKey.bounds.right;
+        float w = (emojiDelKey.bounds.left - left) / Math.max(1, emojiTabIcons.size());
+        for (int i = 0; i < emojiTabIcons.size(); i++) {
+            emojiTabRects.add(new RectF(left + i * w, emojiAbcKey.bounds.top,
+                    left + (i + 1) * w, emojiAbcKey.bounds.bottom));
+        }
+        clampEmojiScroll();
+    }
+
+    private void addEmojiSection(String icon, int nameRes, List<String> emojis) {
+        emojiTabIcons.add(icon);
+        emojiTabNames.add(nameRes);
+        emojiTabRows.add(emojiCells.size() / emojiCols);
+        emojiCells.addAll(emojis);
+        while (emojiCells.size() % emojiCols != 0) emojiCells.add(null);
+    }
+
+    private float maxEmojiScroll() {
+        int totalRows = emojiCells.size() / Math.max(1, emojiCols);
+        return Math.max(0f, totalRows * emojiCellH - emojiGridRect.height());
+    }
+
+    private void clampEmojiScroll() {
+        emojiScrollY = Math.max(0f, Math.min(maxEmojiScroll(), emojiScrollY));
+    }
+
+    private int emojiCellAt(float x, float y) {
+        if (!emojiGridRect.contains(x, y)) return -1;
+        int col = Math.min(emojiCols - 1, (int) ((x - emojiGridRect.left) / emojiCellW));
+        int row = (int) ((y - emojiGridRect.top + emojiScrollY) / emojiCellH);
+        int idx = row * emojiCols + col;
+        return idx < emojiCells.size() && emojiCells.get(idx) != null ? idx : -1;
+    }
+
+    private int emojiTabAt(float x, float y) {
+        for (int i = 0; i < emojiTabRects.size(); i++) {
+            if (emojiTabRects.get(i).contains(x, y)) return i;
+        }
+        return -1;
+    }
+
+    /** The tab whose section contains the first (mostly) visible row. */
+    private int currentEmojiTab() {
+        if (emojiScrollY >= maxEmojiScroll() - 1 && maxEmojiScroll() > 0) {
+            return emojiTabRows.size() - 1;
+        }
+        int row = (int) ((emojiScrollY + emojiCellH * 0.5f) / emojiCellH);
+        int current = 0;
+        for (int i = 0; i < emojiTabRows.size(); i++) {
+            if (emojiTabRows.get(i) <= row) current = i;
+        }
+        return current;
+    }
+
+    private void scrollToEmojiTab(int tab) {
+        float target = Math.min(maxEmojiScroll(), emojiTabRows.get(tab) * emojiCellH);
+        emojiScroller.forceFinished(true);
+        emojiScroller.startScroll(0, Math.round(emojiScrollY), 0,
+                Math.round(target - emojiScrollY), 250);
+        postInvalidateOnAnimation();
+    }
+
+    private boolean emojiCellVisible(int idx) {
+        float top = emojiGridRect.top + (idx / emojiCols) * emojiCellH - emojiScrollY;
+        return top + emojiCellH > emojiGridRect.top && top < emojiGridRect.bottom;
+    }
+
+    private void onEmojiPointerDown(int id, float x, float y) {
+        if (pointers.size() > 0) return;
+        Pointer p = new Pointer(id);
+        if (emojiGridRect.contains(x, y)) {
+            p.region = REGION_EMOJI;
+            p.tile = emojiCellAt(x, y);
+            emojiScroller.forceFinished(true);
+            emojiDragging = false;
+            emojiDownY = y;
+            emojiLastY = y;
+            if (emojiVelocity == null) {
+                emojiVelocity = VelocityTracker.obtain();
+            } else {
+                emojiVelocity.clear();
+            }
+        } else if (emojiAbcKey.bounds.contains(x, y)) {
+            p.region = REGION_EMOJI_ABC;
+        } else if (emojiDelKey.bounds.contains(x, y)) {
+            p.region = REGION_EMOJI_DEL;
+        } else {
+            p.tile = emojiTabAt(x, y);
+            if (p.tile < 0) return;
+            p.region = REGION_EMOJI_TAB;
+        }
+        pointers.put(id, p);
+        stripPointerId = id;
+        if (p.region == REGION_EMOJI_DEL) {
+            feedback(Key.CODE_DELETE);
+            emit(Key.CODE_DELETE);
+            startRepeat();
+        } else {
+            feedback(0);
+        }
+    }
+
+    private void onEmojiPointerUp(Pointer p, float x, float y) {
+        switch (p.region) {
+            case REGION_EMOJI:
+                if (emojiDragging) {
+                    emojiDragging = false;
+                    if (emojiVelocity != null) {
+                        emojiVelocity.computeCurrentVelocity(1000, maxFlingVelocity);
+                        float vy = emojiVelocity.getYVelocity(p.id);
+                        if (Math.abs(vy) >= minFlingVelocity) {
+                            emojiScroller.fling(0, Math.round(emojiScrollY), 0, Math.round(-vy),
+                                    0, 0, 0, Math.round(maxEmojiScroll()));
+                            postInvalidateOnAnimation();
+                        }
+                    }
+                    notifyA11yLayoutChanged();
+                } else if (p.tile >= 0 && p.tile == emojiCellAt(x, y)) {
+                    emitEmoji(emojiCells.get(p.tile));
+                }
+                break;
+            case REGION_EMOJI_TAB:
+                if (p.tile >= 0 && p.tile == emojiTabAt(x, y)) scrollToEmojiTab(p.tile);
+                break;
+            case REGION_EMOJI_ABC:
+                if (emojiAbcKey.bounds.contains(x, y)) closeEmojiPanel();
+                break;
+            case REGION_EMOJI_DEL:
+                stopRepeat();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void emitEmoji(String emoji) {
+        if (listener != null) listener.onEmoji(emoji);
+    }
+
+    @Override
+    public void computeScroll() {
+        if (emojiScroller.computeScrollOffset()) {
+            emojiScrollY = emojiScroller.getCurrY();
+            clampEmojiScroll();
+            if (emojiScroller.isFinished()) notifyA11yLayoutChanged();
+            postInvalidateOnAnimation();
+        }
     }
 
     // ---------------------------------------------------------------- shift
@@ -1068,6 +1405,7 @@ public final class KeyboardView extends View {
     }
 
     private void cancelAllPointers() {
+        emojiDragging = false;
         for (int i = 0; i < pointers.size(); i++) cancelLongPress(pointers.valueAt(i));
         pointers.clear();
         stripPointerId = -1;
@@ -1082,6 +1420,11 @@ public final class KeyboardView extends View {
     @Override
     protected void onDetachedFromWindow() {
         cancelAllPointers();
+        emojiScroller.forceFinished(true);
+        if (emojiVelocity != null) {
+            emojiVelocity.recycle();
+            emojiVelocity = null;
+        }
         super.onDetachedFromWindow();
     }
 
@@ -1096,8 +1439,13 @@ public final class KeyboardView extends View {
     private static final int VID_NONE = Integer.MIN_VALUE;
     private static final int VID_STRIP = 10;
     private static final int VID_TILE = 100;
+    private static final int VID_EMOJI_TAB = 500;
+    private static final int VID_EMOJI_ABC = 600;
+    private static final int VID_EMOJI_DEL = 601;
     private static final int VID_KEY = 1000;
     private static final int VID_ROW = 100;
+    /** Emoji cells: VID_EMOJI + index into emojiCells. */
+    private static final int VID_EMOJI = 100000;
 
     private int hoveredVid = VID_NONE;
     private int a11yFocusedVid = VID_NONE;
@@ -1119,6 +1467,16 @@ public final class KeyboardView extends View {
             int t = tileAt(x, y);
             return t < 0 ? VID_NONE : VID_TILE + t;
         }
+        if (emojiPanelOpen) {
+            if (emojiGridRect.contains(x, y)) {
+                int idx = emojiCellAt(x, y);
+                return idx < 0 ? VID_NONE : VID_EMOJI + idx;
+            }
+            if (emojiAbcKey.bounds.contains(x, y)) return VID_EMOJI_ABC;
+            if (emojiDelKey.bounds.contains(x, y)) return VID_EMOJI_DEL;
+            int t = emojiTabAt(x, y);
+            return t < 0 ? VID_NONE : VID_EMOJI_TAB + t;
+        }
         Key k = keyAt(x, y);
         return k == null ? VID_NONE : keyVid(k);
     }
@@ -1132,7 +1490,7 @@ public final class KeyboardView extends View {
     }
 
     private Key keyForVid(int vid) {
-        if (vid < VID_KEY || stylePanelOpen) return null;
+        if (vid < VID_KEY || vid >= VID_EMOJI || stylePanelOpen || emojiPanelOpen) return null;
         int r = (vid - VID_KEY) / VID_ROW;
         int i = (vid - VID_KEY) % VID_ROW;
         if (r >= rows.size() || i >= rows.get(r).keys.size()) return null;
@@ -1140,7 +1498,14 @@ public final class KeyboardView extends View {
     }
 
     private boolean isValidVid(int vid) {
+        if (vid >= VID_EMOJI) {
+            int idx = vid - VID_EMOJI;
+            return emojiPanelOpen && idx < emojiCells.size() && emojiCells.get(idx) != null
+                    && emojiCellVisible(idx);
+        }
         if (vid >= VID_KEY) return keyForVid(vid) != null;
+        if (vid == VID_EMOJI_ABC || vid == VID_EMOJI_DEL) return emojiPanelOpen;
+        if (vid >= VID_EMOJI_TAB) return emojiPanelOpen && vid - VID_EMOJI_TAB < emojiTabIcons.size();
         if (vid >= VID_TILE) return stylePanelOpen && vid - VID_TILE < tileRects.length;
         if (vid > VID_STRIP) return vid - VID_STRIP >= REGION_CHIP && vid - VID_STRIP <= REGION_GEAR
                 && (vid - VID_STRIP != REGION_SUGGESTION || undoWord != null || pendingSlang != null);
@@ -1149,8 +1514,21 @@ public final class KeyboardView extends View {
 
     private void boundsForVid(int vid, Rect out) {
         RectF r;
-        if (vid >= VID_KEY) {
+        if (vid >= VID_EMOJI) {
+            int idx = vid - VID_EMOJI;
+            float left = emojiGridRect.left + (idx % emojiCols) * emojiCellW;
+            float top = emojiGridRect.top + (idx / emojiCols) * emojiCellH - emojiScrollY;
+            r = tmp;
+            r.set(left, Math.max(top, emojiGridRect.top), left + emojiCellW,
+                    Math.min(top + emojiCellH, emojiGridRect.bottom));
+        } else if (vid >= VID_KEY) {
             r = keyForVid(vid).bounds;
+        } else if (vid == VID_EMOJI_ABC) {
+            r = emojiAbcKey.bounds;
+        } else if (vid == VID_EMOJI_DEL) {
+            r = emojiDelKey.bounds;
+        } else if (vid >= VID_EMOJI_TAB) {
+            r = emojiTabRects.get(vid - VID_EMOJI_TAB);
         } else if (vid >= VID_TILE) {
             r = tileRects[vid - VID_TILE];
         } else {
@@ -1166,6 +1544,12 @@ public final class KeyboardView extends View {
 
     private CharSequence describeVid(int vid) {
         Context c = getContext();
+        if (vid >= VID_EMOJI) return emojiCells.get(vid - VID_EMOJI);
+        if (vid == VID_EMOJI_ABC) return c.getString(R.string.a11y_letters);
+        if (vid == VID_EMOJI_DEL) return c.getString(R.string.a11y_delete);
+        if (vid >= VID_EMOJI_TAB && vid < VID_KEY) {
+            return c.getString(emojiTabNames.get(vid - VID_EMOJI_TAB));
+        }
         if (vid >= VID_KEY) {
             Key k = keyForVid(vid);
             switch (k.type) {
@@ -1185,7 +1569,7 @@ public final class KeyboardView extends View {
                         case Key.CODE_MODE_SYMBOLS: return c.getString(R.string.a11y_symbols);
                         case Key.CODE_MODE_SYMBOLS2: return c.getString(R.string.a11y_more_symbols);
                         case Key.CODE_MODE_ALPHA: return c.getString(R.string.a11y_letters);
-                        case Key.CODE_GLOBE: return c.getString(R.string.a11y_switch_keyboard);
+                        case Key.CODE_EMOJI: return c.getString(R.string.a11y_emoji);
                         default: return k.label;
                     }
                 default:
@@ -1211,7 +1595,19 @@ public final class KeyboardView extends View {
 
     private void clickVid(int vid) {
         if (!isValidVid(vid)) return;
-        if (vid >= VID_KEY) {
+        if (vid >= VID_EMOJI) {
+            feedback(0);
+            emitEmoji(emojiCells.get(vid - VID_EMOJI));
+        } else if (vid == VID_EMOJI_ABC) {
+            feedback(0);
+            closeEmojiPanel();
+        } else if (vid == VID_EMOJI_DEL) {
+            feedback(Key.CODE_DELETE);
+            emit(Key.CODE_DELETE);
+        } else if (vid >= VID_EMOJI_TAB && vid < VID_KEY) {
+            feedback(0);
+            scrollToEmojiTab(vid - VID_EMOJI_TAB);
+        } else if (vid >= VID_KEY) {
             Key k = keyForVid(vid);
             feedback(k.code);
             activateKey(k);
@@ -1312,6 +1708,22 @@ public final class KeyboardView extends View {
                 onInitializeAccessibilityNodeInfo(info);
                 if (stylePanelOpen) {
                     for (int i = 0; i < tileRects.length; i++) info.addChild(KeyboardView.this, VID_TILE + i);
+                } else if (emojiPanelOpen) {
+                    for (int i = 0; i < emojiCells.size(); i++) {
+                        if (isValidVid(VID_EMOJI + i)) info.addChild(KeyboardView.this, VID_EMOJI + i);
+                    }
+                    for (int i = 0; i < emojiTabIcons.size(); i++) {
+                        info.addChild(KeyboardView.this, VID_EMOJI_TAB + i);
+                    }
+                    info.addChild(KeyboardView.this, VID_EMOJI_ABC);
+                    info.addChild(KeyboardView.this, VID_EMOJI_DEL);
+                    info.setScrollable(true);
+                    if (emojiScrollY > 0) {
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD);
+                    }
+                    if (emojiScrollY < maxEmojiScroll()) {
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD);
+                    }
                 } else {
                     for (int r = 0; r < rows.size(); r++) {
                         for (int i = 0; i < rows.get(r).keys.size(); i++) {
@@ -1355,7 +1767,20 @@ public final class KeyboardView extends View {
 
         @Override
         public boolean performAction(int vid, int action, Bundle arguments) {
-            if (vid == HOST_VIEW_ID) return performAccessibilityAction(action, arguments);
+            if (vid == HOST_VIEW_ID) {
+                if (emojiPanelOpen && (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                        || action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
+                    float page = Math.max(emojiCellH, emojiGridRect.height() - emojiCellH);
+                    float before = emojiScrollY;
+                    emojiScroller.forceFinished(true);
+                    emojiScrollY += action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ? page : -page;
+                    clampEmojiScroll();
+                    invalidate();
+                    notifyA11yLayoutChanged();
+                    return emojiScrollY != before;
+                }
+                return performAccessibilityAction(action, arguments);
+            }
             if (!isValidVid(vid)) return false;
             switch (action) {
                 case AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS:

@@ -23,22 +23,21 @@ public final class KeyboardLayouts {
 
     private KeyboardLayouts() {}
 
-    public static List<Row> build(Mode mode, FieldConfig.Layout numpadVariant, boolean showGlobe,
-            Key enterKey) {
+    public static List<Row> build(Mode mode, FieldConfig.Layout numpadVariant, Key enterKey) {
         switch (mode) {
             case SYMBOLS:
-                return symbols(showGlobe, enterKey);
+                return symbols(enterKey);
             case SYMBOLS2:
-                return symbols2(showGlobe, enterKey);
+                return symbols2(enterKey);
             case NUMPAD:
                 return numpad(numpadVariant, enterKey);
             case LETTERS:
             default:
-                return letters(showGlobe, enterKey);
+                return letters(enterKey);
         }
     }
 
-    private static List<Row> letters(boolean showGlobe, Key enter) {
+    private static List<Row> letters(Key enter) {
         String top = "qwertyuiop";
         String digits = "1234567890";
         Key[] r1 = new Key[10];
@@ -50,10 +49,10 @@ public final class KeyboardLayouts {
                         new Key[] {Key.fn(Key.CODE_SHIFT, null, DotIcon.SHIFT, 1.5f, Key.Type.SHIFT)},
                         chars("zxcvbnm"),
                         new Key[] {Key.fn(Key.CODE_DELETE, null, DotIcon.DELETE, 1.5f, Key.Type.DELETE)})),
-                bottomRow("?123", Key.CODE_MODE_SYMBOLS, ',', '.', showGlobe, enter));
+                bottomRow("?123", Key.CODE_MODE_SYMBOLS, ',', '.', enter));
     }
 
-    private static List<Row> symbols(boolean showGlobe, Key enter) {
+    private static List<Row> symbols(Key enter) {
         return Arrays.asList(
                 new Row(0f, chars("1234567890")),
                 new Row(0f, chars("@#$_&-+()/")),
@@ -61,10 +60,10 @@ public final class KeyboardLayouts {
                         new Key[] {Key.fn(Key.CODE_MODE_SYMBOLS2, "=\\<", null, 1.5f, Key.Type.FUNCTION)},
                         chars("*\"':;!?"),
                         new Key[] {Key.fn(Key.CODE_DELETE, null, DotIcon.DELETE, 1.5f, Key.Type.DELETE)})),
-                bottomRow("ABC", Key.CODE_MODE_ALPHA, ',', '.', showGlobe, enter));
+                bottomRow("ABC", Key.CODE_MODE_ALPHA, ',', '.', enter));
     }
 
-    private static List<Row> symbols2(boolean showGlobe, Key enter) {
+    private static List<Row> symbols2(Key enter) {
         return Arrays.asList(
                 new Row(0f, chars("~`|•√π÷×¶∆")),
                 new Row(0f, chars("£¢€¥^°={}\\")),
@@ -72,7 +71,7 @@ public final class KeyboardLayouts {
                         new Key[] {Key.fn(Key.CODE_MODE_SYMBOLS, "?123", null, 1.5f, Key.Type.FUNCTION)},
                         chars("%©®™✓[]"),
                         new Key[] {Key.fn(Key.CODE_DELETE, null, DotIcon.DELETE, 1.5f, Key.Type.DELETE)})),
-                bottomRow("ABC", Key.CODE_MODE_ALPHA, '<', '>', showGlobe, enter));
+                bottomRow("ABC", Key.CODE_MODE_ALPHA, '<', '>', enter));
     }
 
     private static List<Row> numpad(FieldConfig.Layout variant, Key enter) {
@@ -105,12 +104,12 @@ public final class KeyboardLayouts {
     }
 
     private static Row bottomRow(String modeLabel, int modeCode, char left, char right,
-            boolean showGlobe, Key enter) {
+            Key enter) {
         List<Key> keys = new ArrayList<>();
         keys.add(Key.fn(modeCode, modeLabel, null, 1.5f, Key.Type.FUNCTION));
-        if (showGlobe) keys.add(Key.fn(Key.CODE_GLOBE, null, DotIcon.GLOBE, 1f, Key.Type.FUNCTION));
+        keys.add(Key.fn(Key.CODE_EMOJI, null, DotIcon.EMOJI, 1f, Key.Type.FUNCTION));
         keys.add(Key.chr(left, 1f));
-        keys.add(Key.fn(Key.CODE_SPACE, null, null, showGlobe ? 4f : 5f, Key.Type.SPACE));
+        keys.add(Key.fn(Key.CODE_SPACE, null, null, 4f, Key.Type.SPACE));
         keys.add(Key.chr(right, 1f));
         keys.add(Key.fn(enter.code, enter.label, enter.icon, 1.5f, Key.Type.ENTER));
         return new Row(0f, keys.toArray(new Key[0]));

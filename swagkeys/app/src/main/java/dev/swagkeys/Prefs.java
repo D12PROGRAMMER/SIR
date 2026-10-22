@@ -3,6 +3,9 @@ package dev.swagkeys;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Preference keys and typed accessors. */
 public final class Prefs {
     public static final String FILE = "swagkeys";
@@ -16,6 +19,9 @@ public final class Prefs {
     public static final String KEY_FONT_NAME = "font_name";
     public static final String KEY_HAPTICS = "haptics";
     public static final String KEY_SOUND = "sound";
+    public static final String KEY_RECENT_EMOJI = "recent_emoji";
+
+    private static final int MAX_RECENT_EMOJI = 24;
 
     public static final String THEME_SYSTEM = "system";
     public static final String THEME_DARK = "dark";
@@ -80,6 +86,24 @@ public final class Prefs {
 
     public int fontVersion() {
         return sp.getInt(KEY_FONT_VERSION, 0);
+    }
+
+    /** Recently inserted emoji, most recent first. */
+    public List<String> recentEmojis() {
+        String raw = sp.getString(KEY_RECENT_EMOJI, "");
+        List<String> list = new ArrayList<>();
+        for (String e : raw.split("\n")) {
+            if (!e.isEmpty()) list.add(e);
+        }
+        return list;
+    }
+
+    public void addRecentEmoji(String emoji) {
+        List<String> list = recentEmojis();
+        list.remove(emoji);
+        list.add(0, emoji);
+        while (list.size() > MAX_RECENT_EMOJI) list.remove(list.size() - 1);
+        sp.edit().putString(KEY_RECENT_EMOJI, String.join("\n", list)).apply();
     }
 
     public boolean haptics() {

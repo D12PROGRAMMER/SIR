@@ -9,7 +9,7 @@ public final class Key {
     public static final int CODE_MODE_ALPHA = -3;
     public static final int CODE_MODE_SYMBOLS2 = -4;
     public static final int CODE_DELETE = -5;
-    public static final int CODE_GLOBE = -6;
+    public static final int CODE_EMOJI = -6;
     public static final int CODE_ENTER = -7;
     public static final int CODE_SPACE = ' ';
 

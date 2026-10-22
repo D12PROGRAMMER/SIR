@@ -52,7 +52,15 @@
     <string name="a11y_symbols">Symbols</string>
     <string name="a11y_more_symbols">More symbols</string>
     <string name="a11y_letters">Letters</string>
-    <string name="a11y_switch_keyboard">Switch keyboard</string>
+    <string name="a11y_emoji">Emoji</string>
+    <string name="a11y_emoji_recent">Recently used emoji</string>
+    <string name="a11y_emoji_smileys">Smileys and emotion</string>
+    <string name="a11y_emoji_people">People and gestures</string>
+    <string name="a11y_emoji_nature">Animals and nature</string>
+    <string name="a11y_emoji_food">Food and drink</string>
+    <string name="a11y_emoji_activity">Activities and travel</string>
+    <string name="a11y_emoji_objects">Objects</string>
+    <string name="a11y_emoji_symbols">Symbols</string>
     <string name="a11y_style_selected">%1$s, selected</string>
     <string name="a11y_style_chip">Text style: %1$s</string>
     <string name="a11y_undo">Undo slang, restore %1$s</string>
