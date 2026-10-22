@@ -7,7 +7,7 @@ import java.util.List;
  * Simulates an editor with BaseInputConnection replace semantics. Selection updates are queued
  * (as the framework delivers them asynchronously) and delivered with {@link #deliverUpdates()}.
  */
-final class FakeEditor implements Editor {
+class FakeEditor implements Editor {
     final StringBuilder text = new StringBuilder();
     int selStart;
     int selEnd;

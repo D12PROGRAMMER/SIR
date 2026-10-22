@@ -527,6 +527,22 @@ public class InputLogicTest {
     }
 
     @Test
+    public void canDeleteInEditorWithoutTextModel() {
+        // BaseInputConnection fallback mode: no text visible, but DEL keys still delete.
+        FakeEditor hidden = new FakeEditor("") {
+            @Override
+            public CharSequence getTextBeforeCursor(int n) {
+                return "";
+            }
+        };
+        startWith(hidden, FieldConfig.text(FieldConfig.Mode.PLAIN, false, 0, ACTION_NONE, -1, -1),
+                TextStyle.NORMAL);
+        assertTrue(logic.canDelete());
+        type("ab");
+        assertTrue(logic.canDelete());
+    }
+
+    @Test
     public void cursorMoveCountsGraphemesAndHandlesRtl() {
         start("a👍🏽b", FieldConfig.Mode.STYLED, false, TextStyle.NORMAL);
         logic.moveCursor(-3);

@@ -1433,8 +1433,15 @@ public final class KeyboardView extends View {
         if (steps == 0) return;
         p.cursorAnchorX += steps * step;
         int moved = listener == null ? 0 : listener.onCursorMove(steps);
-        // A tick for every step the cursor really moves; none against the end of the text.
-        if (moved != 0) hapticTick();
+        // A tick for every step the cursor really moves (none against the end of the text),
+        // at most one per STEP_TICK_MIN_MS so a fast flick stays distinct ticks, not a buzz.
+        if (moved != 0) {
+            long now = SystemClock.uptimeMillis();
+            if (now - lastStepTick >= STEP_TICK_MIN_MS) {
+                lastStepTick = now;
+                hapticTick();
+            }
+        }
     }
 
     /** Swipe left from delete: every 36 dp selects one more word; moving back reduces it. */
@@ -2571,6 +2578,8 @@ public final class KeyboardView extends View {
 
     /** Number of haptic effects performed; read by tests. */
     int hapticCount;
+    private static final long STEP_TICK_MIN_MS = 50;
+    private long lastStepTick = Long.MIN_VALUE / 2;
 
     /** The key-press haptic, used for presses and for every step of a repeated action. */
     private void hapticTick() {

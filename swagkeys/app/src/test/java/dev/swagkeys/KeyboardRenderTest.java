@@ -856,15 +856,25 @@ public class KeyboardRenderTest {
         touch(MotionEvent.ACTION_DOWN, 0, new float[][] {{x, y}});
         int afterPress = view.hapticCount;
         for (int i = 1; i <= 6; i++) {
+            ShadowLooper.idleMainLooper(60, java.util.concurrent.TimeUnit.MILLISECONDS);
             touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x + i * 10 * density, y}});
         }
         int moving = view.hapticCount - afterPress;
         assertTrue("ticks " + moving, moving >= 3);
         cursorBlocked = true; // against the end of the text
         for (int i = 7; i <= 10; i++) {
+            ShadowLooper.idleMainLooper(60, java.util.concurrent.TimeUnit.MILLISECONDS);
             touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x + i * 10 * density, y}});
         }
         assertEquals(afterPress + moving, view.hapticCount);
+        // A fast flick (many steps within 50 ms) gives a single tick, not one per frame.
+        cursorBlocked = false;
+        int beforeFlick = view.hapticCount;
+        ShadowLooper.idleMainLooper(60, java.util.concurrent.TimeUnit.MILLISECONDS);
+        for (int i = 11; i <= 20; i++) {
+            touch(MotionEvent.ACTION_MOVE, 0, new float[][] {{x + i * 10 * density, y}});
+        }
+        assertEquals(beforeFlick + 1, view.hapticCount);
         touch(MotionEvent.ACTION_UP, 0, new float[][] {{x + 100 * density, y}});
     }
 

@@ -342,8 +342,9 @@ public final class InputLogic {
             }
         }
         for (int i = 0; i < count; i++) editor.sendKey(key);
-        // The editor reports the new position through onUpdateSelection.
-        selStart = selEnd = -1;
+        // The editor reports the new position through onUpdateSelection; with no key sent
+        // nothing changes and no update follows, so the known position stays valid.
+        if (count > 0) selStart = selEnd = -1;
         notifyChanged();
         return steps < 0 ? -count : count;
     }
@@ -353,8 +354,10 @@ public final class InputLogic {
         if (config.mode == FieldConfig.Mode.RAW || word.length() > 0) return true;
         if (selStart >= 0 && selStart != selEnd) return true;
         CharSequence before = editor.getTextBeforeCursor(1);
-        if (before == null) return true;
-        return before.length() > 0 || hasSelectedText();
+        if (before == null || before.length() > 0 || hasSelectedText()) return true;
+        // Editors without a text model (BaseInputConnection fallback mode) report "" but still
+        // act on KEYCODE_DEL: only a cursor known to be at 0 has nothing to delete.
+        return selStart != 0;
     }
 
     /** Deletes the {@code words} words before the cursor (the composing word counts as one). */
