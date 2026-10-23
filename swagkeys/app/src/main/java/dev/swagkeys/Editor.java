@@ -23,6 +23,13 @@ public interface Editor {
      */
     int[] getSelection();
 
+    /**
+     * Whether the editor's styled text marks the {@code length} chars right before the cursor
+     * as its composing region: 1 if so, 0 if the styled text marks no such region, -1 if the
+     * editor gives no styled text (or no spans that show composing).
+     */
+    int composingSpanBeforeCursor(int length);
+
     void setComposingText(CharSequence text);
 
     void commitText(CharSequence text);

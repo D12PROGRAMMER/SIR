@@ -527,6 +527,144 @@ public class AutocorrectTest {
         assertEquals("teh", logic.undoableWord());
     }
 
+    // ---------------------------------------------------------------- round 6 scenarios
+
+    @Test
+    public void queuedTapAfterEqualTextIsNotTakenForTheWord() {
+        // The editor's styled text shows where it composes (learned from a word typed before).
+        startWith("cat dog");
+        type("s<");
+        logic.moveCursor(-3);
+        editor.deliverAllBut(1);
+        logic.onCodePoint('a');
+        editor.deliverAllBut(2);
+        editor.userMoveCursor(2);
+        editor.deliverUpdates();
+        type("r");
+        assertEquals("cart adog", editor.value());
+
+        startWith("x");
+        type("s<");
+        logic.moveCursor(-1);
+        logic.onCodePoint('x');
+        editor.deliverAllBut(2);
+        editor.userMoveCursor(2);
+        editor.deliverUpdates();
+        type("?");
+        assertEquals("xx?", editor.value());
+    }
+
+    @Test
+    public void queuedTapIsNotTakenForAMovedWord() {
+        startWith("teh x");
+        logic.moveCursor(-3);
+        editor.deliverAllBut(1);
+        typeKeepingLag("a", 2);
+        typeKeepingLag(" ", 2);
+        typeKeepingLag("b", 3);
+        typeKeepingLag("c", 4);
+        editor.userMoveCursor(4);
+        editor.deliverUpdates();
+        type("d");
+        assertEquals("tea dbch x", editor.value());
+    }
+
+    @Test
+    public void withoutReadsTheLastArrowReportDoesNotEndTheWord() {
+        startWith("ok z x");
+        editor.selectionReadable = false;
+        logic.moveCursor(-1);
+        editor.deliverUpdates();
+        logic.moveCursor(-1);
+        editor.deliverUpdates();
+        logic.moveCursor(-1);
+        editor.deliverAllBut(1);
+        type("teh ");
+        assertEquals("ok the z x", editor.value());
+        assertEquals("teh", logic.undoableWord());
+
+        startWith("ok ");
+        editor.selectionReadable = false;
+        editor.userMoveCursor(1);
+        editor.deliverUpdates();
+        logic.moveCursor(2);
+        editor.deliverAllBut(1);
+        typeLagged("teh ", 1);
+        assertEquals("ok the ", editor.value());
+    }
+
+    /** One report per IME call or user action, as editors that report once per frame do. */
+    private void act(Runnable r) {
+        r.run();
+        editor.flush();
+        editor.deliverUpdates();
+    }
+
+    @Test
+    public void wordRetypedAtAnEarlierWordsStartWhileCoalescing() {
+        startWith("");
+        editor.coalesce = true;
+        for (char c : "so".toCharArray()) act(() -> logic.onCodePoint(c));
+        act(() -> logic.moveCursor(-2));
+        for (char c : "al".toCharArray()) act(() -> logic.onCodePoint(c));
+        act(() -> editor.userMoveCursor(4));
+        act(() -> logic.onCodePoint('x'));
+        assertEquals("alsox", editor.value());
+    }
+
+    @Test
+    public void appRemovingComposingAfterAdoptedPositions() {
+        startWith("ok ");
+        editor.coalesce = true;
+        act(() -> logic.moveCursor(-3));
+        act(() -> logic.onCodePoint('x'));
+        act(() -> editor.appRemoveComposing());
+        act(() -> logic.onCodePoint('y'));
+        assertEquals("xyok ", editor.value());
+    }
+
+    @Test
+    public void lateReportsOfEarlierWordsStillNoticeAClearedField() {
+        start(true, false, TextStyle.NORMAL);
+        typeKeepingLag("so ok ", 2);
+        editor.appSetText("");
+        editor.deliverAllBut(1);
+        type("teh ");
+        assertEquals("the ", editor.value());
+        assertEquals("teh", logic.undoableWord());
+    }
+
+    @Test
+    public void withoutComposingStylesTheTextCheckStillAdoptsTheWord() {
+        // Editors whose styled text does not show composing: a word typed after a slide whose
+        // last arrow report is late keeps composing.
+        startWith("ok z x");
+        editor.composingStyles = false;
+        type("s<");
+        logic.moveCursor(-1);
+        editor.deliverAllBut(1);
+        logic.onCodePoint('t');
+        editor.deliverAllBut(1);
+        type("eh ");
+        assertEquals("ok z the x", editor.value());
+        assertEquals("teh", logic.undoableWord());
+    }
+
+    @Test
+    public void lateReportOfAnEarlierWordResyncsAfterADroppedEdit() {
+        startWith("hi there");
+        editor.selectionReadable = false;
+        type("h");
+        logic.onDelete();
+        logic.onCodePoint('p');
+        editor.deliverAllBut(1);
+        logic.onCodePoint('y');
+        editor.deliverUpdates();
+        logic.deleteWords(2);
+        editor.deliverUpdates();
+        assertEquals("hi ", editor.value());
+    }
+
     /** Starts a chat field holding {@code text}, cursor at its end. */
     private void startWith(String text) {
         start(true, false, TextStyle.NORMAL);

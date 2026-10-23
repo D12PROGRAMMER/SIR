@@ -4,7 +4,7 @@ Android input method with a Nothing OS look: dot-matrix labels (Doto typeface), 
 surfaces, a red accent. Text styles are applied as you type, typos are fixed without touching
 capitalization, and finished words can be swapped for slang automatically.
 
-Prebuilt APK: [`dist/SwagKeys-1.3.1.apk`](dist/SwagKeys-1.3.1.apk) (Android 8.0 / API 26 or later,
+Prebuilt APK: [`dist/SwagKeys-1.3.2.apk`](dist/SwagKeys-1.3.2.apk) (Android 8.0 / API 26 or later,
 signed with a debug key; installs over earlier versions).
 
 ## Install

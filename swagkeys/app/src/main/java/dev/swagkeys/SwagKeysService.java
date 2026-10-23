@@ -9,6 +9,7 @@ import android.inputmethodservice.InputMethodService;
 import android.os.Build;
 import android.os.IBinder;
 import android.text.InputType;
+import android.text.Spanned;
 import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
@@ -395,6 +396,24 @@ public final class SwagKeysService extends InputMethodService
             if (st == null || st.getOffset() < 0) return null;
             return ordered(st.getOffset() + st.getSelectionStart(),
                     st.getOffset() + st.getSelectionEnd());
+        }
+
+        @Override
+        public int composingSpanBeforeCursor(int length) {
+            InputConnection ic = getCurrentInputConnection();
+            if (ic == null || length <= 0) return -1;
+            CharSequence t = ic.getTextBeforeCursor(length, InputConnection.GET_TEXT_WITH_STYLES);
+            if (!(t instanceof Spanned)) return -1;
+            // Only parcelable styles cross to the IME: the composing underline carries the
+            // SPAN_COMPOSING flag, the editor's own composing marker does not arrive.
+            Spanned sp = (Spanned) t;
+            for (Object o : sp.getSpans(0, sp.length(), Object.class)) {
+                if ((sp.getSpanFlags(o) & Spanned.SPAN_COMPOSING) != 0 && sp.getSpanStart(o) == 0
+                        && sp.getSpanEnd(o) == sp.length() && sp.length() == length) {
+                    return 1;
+                }
+            }
+            return 0;
         }
 
         private int[] ordered(int a, int b) {

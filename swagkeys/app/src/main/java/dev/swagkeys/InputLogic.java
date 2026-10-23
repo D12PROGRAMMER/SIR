@@ -84,6 +84,10 @@ public final class InputLogic {
     private final int[] pastComposingStarts = {-1, -1, -1, -1};
     /** Above this selection length, the editor's selection is not read (the read carries it). */
     private static final int MAX_READ_SELECTION = 4096;
+    /** The editor marks its composing region in styled text (learned from this word's reports). */
+    private boolean composingStylesSeen;
+    private int composingStyleProbes;
+    private static final int MAX_COMPOSING_STYLE_PROBES = 3;
 
     /**
      * Last replacement (correction and/or slang), revertible by Delete or the strip while the
@@ -117,6 +121,8 @@ public final class InputLogic {
         keepPending = null;
         arrowReportsPending = 0;
         composingReported = false;
+        composingStylesSeen = false;
+        composingStyleProbes = 0;
         java.util.Arrays.fill(pastComposingStarts, -1);
         if (word.length() > 0) {
             // A reset while composing must not leave a region that the next keystroke replaces.
@@ -632,18 +638,36 @@ public final class InputLogic {
         }
         // Only this IME creates composing regions, and its cursor is always at their end.
         boolean composingShaped = candidatesStart >= 0 && ns == ne && ns == candidatesEnd;
+        String shown = word.length() > 0 ? style.apply(word) : "";
         if (word.length() > 0 && composingStart >= 0 && candidatesStart == composingStart
                 && composingShaped) {
             // One of this IME's own setComposingText states of this word, in whatever order
             // updates arrive.
             composingReported = true;
+            probeComposingStyles(shown.length());
             return;
         }
         if (composingShaped && isPastComposingStart(candidatesStart)) {
-            // A late report of an earlier word while it was composing.
-            return;
+            // A late report of an earlier word while it was composing; while positions are
+            // unknown it may also be this word, composing again where an earlier one did.
+            if (word.length() > 0 && selStart < 0) {
+                if (!fitsWord(candidatesStart, candidatesEnd, shown)) return;
+            } else if (word.length() > 0) {
+                return;
+            } else {
+                int[] actual = readSelection(ns, ne);
+                if (actual == null ? isBelatedExpectedUpdate(os, oe, ns, ne)
+                        : actual[0] == selStart && actual[1] == selEnd) {
+                    return;
+                }
+                if (actual != null) {
+                    ns = actual[0];
+                    ne = actual[1];
+                }
+                userChange(ns, ne);
+                return;
+            }
         }
-        String shown = word.length() > 0 ? style.apply(word) : "";
         if (selStart < 0) {
             // Positions were unknown; adopt them if consistent with the composing state.
             if (word.length() > 0 && composingShaped) {
@@ -651,14 +675,17 @@ public final class InputLogic {
                 composingStart = candidatesStart;
                 selStart = selEnd = composingStart + shown.length();
                 arrowReportsPending = 0;
+                composingReported = true;
                 notifyChanged();
                 return;
             }
+            boolean lastArrowReport = false;
             if (arrowReportsPending > 0) {
                 // Each arrow key is reported on its own; the cursor is where the last one says
                 // (a word typed meanwhile reports its own position).
                 arrowReportsPending--;
                 if (arrowReportsPending > 0) return;
+                lastArrowReport = true;
             }
             int[] actual = readSelection(ns, ne);
             if (word.length() == 0) {
@@ -673,13 +700,19 @@ public final class InputLogic {
                 notifyChanged();
                 return;
             }
+            // Without a read, the word typed after the arrow keys reports its own position.
+            if (actual == null && lastArrowReport) return;
             if (actual != null && actual[0] == actual[1]
                     && shown.contentEquals(textBefore(shown.length()))) {
-                // The word typed meanwhile is right before the cursor: it is still composing.
-                selStart = selEnd = actual[0];
-                composingStart = actual[0] - shown.length();
-                notifyChanged();
-                return;
+                // The word typed meanwhile is right before the cursor, so it is probably still
+                // composing there; a tap that already moved the cursor after equal text would
+                // look the same, unless the editor's styles show where it is composing.
+                if (composingMayEndAtCursor(shown.length())) {
+                    selStart = selEnd = actual[0];
+                    composingStart = actual[0] - shown.length();
+                    notifyChanged();
+                    return;
+                }
             }
             if (actual != null) {
                 ns = actual[0];
@@ -700,7 +733,8 @@ public final class InputLogic {
             if (actual != null) {
                 if (actual[0] == selStart && actual[1] == selEnd) return;
                 if (word.length() > 0 && composingShaped && actual[0] == actual[1]
-                        && actual[0] == candidatesStart + shown.length()) {
+                        && actual[0] == candidatesStart + shown.length()
+                        && composingEndsAtCursor(shown, candidatesEnd - candidatesStart)) {
                     // The editor put this word elsewhere than expected (it dropped or changed an
                     // earlier edit without a report): follow it.
                     composingStart = candidatesStart;
@@ -715,9 +749,13 @@ public final class InputLogic {
                 return;
             }
         }
-        // The selection was changed by the user or the application.
-        selStart = ns;
-        selEnd = ne;
+        userChange(ns, ne);
+    }
+
+    /** The selection was changed by the user or the application. */
+    private void userChange(int start, int end) {
+        selStart = start;
+        selEnd = end;
         phantomSpaceAt = -1;
         keepPending = null;
         arrowReportsPending = 0;
@@ -728,6 +766,55 @@ public final class InputLogic {
             editor.finishComposingText();
         }
         notifyChanged();
+    }
+
+    /**
+     * Whether a composing report at {@code start..end} can be the current word: same length,
+     * shown right before the cursor, and (when the editor can tell) the cursor at its end.
+     */
+    private boolean fitsWord(int start, int end, String shown) {
+        if (end - start != shown.length()) return false;
+        int[] actual = editor.getSelection();
+        if (actual != null && (actual[0] != end || actual[1] != end)) return false;
+        return shown.contentEquals(textBefore(shown.length()));
+    }
+
+    /**
+     * Whether the editor's composing region is {@code shown}, right before the cursor: shown by
+     * its styled text, or else by a report of the region at {@code reportedLength} chars (a late
+     * report of a shorter state of the word cannot tell).
+     */
+    private boolean composingEndsAtCursor(String shown, int reportedLength) {
+        int styles = editor.composingSpanBeforeCursor(shown.length());
+        if (styles == 1) {
+            composingStylesSeen = true;
+            return true;
+        }
+        return (styles == -1 || !composingStylesSeen) && reportedLength == shown.length()
+                && shown.contentEquals(textBefore(shown.length()));
+    }
+
+    /**
+     * False only if the editor's styled text shows that its composing region is not the
+     * {@code length} chars before the cursor (once it is known to mark the region at all).
+     */
+    private boolean composingMayEndAtCursor(int length) {
+        int styles = editor.composingSpanBeforeCursor(length);
+        if (styles == 1) {
+            composingStylesSeen = true;
+            return true;
+        }
+        return styles == -1 || !composingStylesSeen;
+    }
+
+    /**
+     * Learns once per input whether the editor marks its composing region in styled text, while
+     * this word is known to be composing right before the cursor.
+     */
+    private void probeComposingStyles(int length) {
+        if (composingStylesSeen || composingStyleProbes >= MAX_COMPOSING_STYLE_PROBES) return;
+        composingStyleProbes++;
+        if (editor.composingSpanBeforeCursor(length) == 1) composingStylesSeen = true;
     }
 
     /**

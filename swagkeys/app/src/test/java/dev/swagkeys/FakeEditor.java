@@ -178,6 +178,15 @@ class FakeEditor implements Editor {
         return selectionReadable ? new int[] {selStart, selEnd} : null;
     }
 
+    /** Whether styled reads mark the composing region (TextView's composing underline). */
+    boolean composingStyles = true;
+
+    @Override
+    public int composingSpanBeforeCursor(int length) {
+        if (!composingStyles) return -1;
+        return compStart >= 0 && compEnd == selStart && compEnd - compStart == length ? 1 : 0;
+    }
+
     @Override
     public CharSequence getSelectedText() {
         return selStart == selEnd ? null : text.substring(selStart, selEnd);
