@@ -121,7 +121,30 @@ class FakeEditor implements Editor {
         reportedCompEnd = compEnd;
     }
 
+    /** An InputFilter that drops supplementary characters (emoji) from what the IME inserts. */
+    boolean rejectSupplementary;
+
+    /**
+     * Edits inside a batch take effect only at its outermost end, and reads inside it see the
+     * text from before (as Compose text fields do).
+     */
+    boolean deferBatch;
+    private final List<Runnable> deferred = new ArrayList<>();
+
+    private void edit(Runnable r) {
+        if (deferBatch && batchDepth > 0) {
+            deferred.add(r);
+        } else {
+            r.run();
+        }
+    }
+
     private void replace(CharSequence t, boolean keepComposing) {
+        if (rejectSupplementary) {
+            StringBuilder kept = new StringBuilder();
+            t.codePoints().filter(Character::isBmpCodePoint).forEach(kept::appendCodePoint);
+            t = kept;
+        }
         int a;
         int b;
         if (compStart >= 0) {
@@ -162,22 +185,28 @@ class FakeEditor implements Editor {
 
     @Override
     public void setComposingText(CharSequence t) {
-        replace(t, true);
+        edit(() -> replace(t, true));
     }
 
     @Override
     public void commitText(CharSequence t) {
-        replace(t, false);
+        edit(() -> replace(t, false));
     }
 
     @Override
     public void finishComposingText() {
-        compStart = compEnd = -1;
-        changed();
+        edit(() -> {
+            compStart = compEnd = -1;
+            changed();
+        });
     }
 
     @Override
     public void deleteSurroundingText(int before, int after) {
+        edit(() -> applyDeleteSurrounding(before, after));
+    }
+
+    private void applyDeleteSurrounding(int before, int after) {
         int a = Math.max(0, selStart - before);
         int e = Math.min(text.length(), selEnd + after);
         text.delete(selEnd, e);
@@ -190,6 +219,10 @@ class FakeEditor implements Editor {
 
     @Override
     public void sendDeleteKey() {
+        edit(this::applyDeleteKey);
+    }
+
+    private void applyDeleteKey() {
         if (selStart != selEnd) {
             text.delete(selStart, selEnd);
             selEnd = selStart;
@@ -268,6 +301,11 @@ class FakeEditor implements Editor {
 
     @Override
     public void endBatchEdit() {
-        if (--batchDepth == 0) changed();
+        if (--batchDepth == 0) {
+            List<Runnable> run = new ArrayList<>(deferred);
+            deferred.clear();
+            for (Runnable r : run) r.run();
+            changed();
+        }
     }
 }

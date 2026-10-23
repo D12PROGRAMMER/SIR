@@ -78,6 +78,12 @@ public final class InputLogic {
     private int phantomSpaceAt = -1;
     /** Arrow-key reports still to come after {@link #moveCursor}; positions are unknown until then. */
     private int arrowReportsPending;
+    /** The editor has reported the current word as composing (so later reports are newer). */
+    private boolean composingReported;
+    /** Where earlier words were composing; the editor may still report those states late. */
+    private final int[] pastComposingStarts = {-1, -1, -1, -1};
+    /** Above this selection length, the editor's selection is not read (the read carries it). */
+    private static final int MAX_READ_SELECTION = 4096;
 
     /**
      * Last replacement (correction and/or slang), revertible by Delete or the strip while the
@@ -110,6 +116,8 @@ public final class InputLogic {
         this.config = config;
         keepPending = null;
         arrowReportsPending = 0;
+        composingReported = false;
+        java.util.Arrays.fill(pastComposingStarts, -1);
         if (word.length() > 0) {
             // A reset while composing must not leave a region that the next keystroke replaces.
             editor.finishComposingText();
@@ -302,7 +310,10 @@ public final class InputLogic {
         }
         clearUndo();
         if (isWordCodePoint(cp)) {
-            if (word.length() == 0) wordAttached = isAttachedToPreviousText();
+            if (word.length() == 0) {
+                wordAttached = isAttachedToPreviousText();
+                composingReported = false;
+            }
             word.appendCodePoint(cp);
             showComposing();
         } else {
@@ -372,6 +383,7 @@ public final class InputLogic {
             if (word.length() == 0) {
                 editor.setComposingText("");
                 if (composingStart >= 0) selStart = selEnd = composingStart;
+                rememberComposingStart();
                 composingStart = -1;
             } else {
                 showComposing();
@@ -410,10 +422,14 @@ public final class InputLogic {
         phantomSpaceAt = -1;
         keepPending = null;
         clearUndo();
+        // Ending the composing word is reported too, before the arrow keys.
+        int extraReports = 0;
         if (word.length() > 0) {
             editor.finishComposingText();
             word.setLength(0);
+            rememberComposingStart();
             composingStart = -1;
+            extraReports = 1;
         }
         int key = steps < 0 ? KEYCODE_DPAD_LEFT : KEYCODE_DPAD_RIGHT;
         int count = Math.abs(steps);
@@ -435,7 +451,7 @@ public final class InputLogic {
         // nothing changes and no update follows, so the known position stays valid.
         if (count > 0) {
             selStart = selEnd = -1;
-            arrowReportsPending = count;
+            arrowReportsPending = count + extraReports;
         }
         notifyChanged();
         return steps < 0 ? -count : count;
@@ -459,11 +475,12 @@ public final class InputLogic {
         keepPending = null;
         clearUndo();
         int remaining = words;
-        // One edit for the editor, so that it reports only the final state.
-        editor.beginBatchEdit();
+        // No batch edit: some editors (Compose) apply a batch only at its end and would answer
+        // the read below with the text from before it.
         if (config.mode == FieldConfig.Mode.STYLED && word.length() > 0) {
             editor.setComposingText("");
             if (composingStart >= 0) selStart = selEnd = composingStart;
+            rememberComposingStart();
             composingStart = -1;
             word.setLength(0);
             remaining--;
@@ -486,7 +503,6 @@ public final class InputLogic {
                 }
             }
         }
-        editor.endBatchEdit();
         notifyChanged();
     }
 
@@ -620,14 +636,20 @@ public final class InputLogic {
                 && composingShaped) {
             // One of this IME's own setComposingText states of this word, in whatever order
             // updates arrive.
+            composingReported = true;
             return;
         }
+        if (composingShaped && isPastComposingStart(candidatesStart)) {
+            // A late report of an earlier word while it was composing.
+            return;
+        }
+        String shown = word.length() > 0 ? style.apply(word) : "";
         if (selStart < 0) {
             // Positions were unknown; adopt them if consistent with the composing state.
             if (word.length() > 0 && composingShaped) {
                 // The update may be stale; expect the state after the latest keystroke.
                 composingStart = candidatesStart;
-                selStart = selEnd = composingStart + style.apply(word).length();
+                selStart = selEnd = composingStart + shown.length();
                 arrowReportsPending = 0;
                 notifyChanged();
                 return;
@@ -636,31 +658,57 @@ public final class InputLogic {
                 // Each arrow key is reported on its own; the cursor is where the last one says
                 // (a word typed meanwhile reports its own position).
                 arrowReportsPending--;
-                if (arrowReportsPending > 0 || word.length() > 0) return;
+                if (arrowReportsPending > 0) return;
             }
+            int[] actual = readSelection(ns, ne);
             if (word.length() == 0) {
                 // The report may be a stale one; the editor's current selection is not.
-                int[] actual = editor.getSelection();
                 selStart = actual != null ? actual[0] : ns;
                 selEnd = actual != null ? actual[1] : ne;
                 // A substitution made while positions were unknown can be undone from here.
-                if (undoCommitted != null && undoCursor < 0 && selStart == selEnd) undoCursor = selEnd;
+                if (undoCommitted != null && undoCursor < 0 && selStart == selEnd
+                        && undoCommitted.contentEquals(textBefore(undoCommitted.length()))) {
+                    undoCursor = selEnd;
+                }
                 notifyChanged();
                 return;
             }
-        } else if (word.length() > 0 && candidatesStart < 0 && os == ns && oe == ne
-                && ns == selStart && ne == selEnd) {
-            // Only the composing region went away, so the app removed it: the word is no longer
-            // composing (setComposingText would now insert a second copy).
+            if (actual != null && actual[0] == actual[1]
+                    && shown.contentEquals(textBefore(shown.length()))) {
+                // The word typed meanwhile is right before the cursor: it is still composing.
+                selStart = selEnd = actual[0];
+                composingStart = actual[0] - shown.length();
+                notifyChanged();
+                return;
+            }
+            if (actual != null) {
+                ns = actual[0];
+                ne = actual[1];
+            }
+        } else if (word.length() > 0 && composingReported && candidatesStart < 0 && os == ns
+                && oe == ne && ns == selStart && ne == selEnd) {
+            // Only the composing region went away after this word was reported composing, so
+            // the app removed it: the word is no longer composing (setComposingText would now
+            // insert a second copy).
         } else if (ns == selStart && ne == selEnd) {
             return;
         } else {
             // A late report of this IME's own edits, or a move by the user or the application.
             // Reports can lag several edits behind and editors may coalesce them, so their values
             // cannot tell; the editor's current selection can.
-            int[] actual = editor.getSelection();
+            int[] actual = readSelection(ns, ne);
             if (actual != null) {
                 if (actual[0] == selStart && actual[1] == selEnd) return;
+                if (word.length() > 0 && composingShaped && actual[0] == actual[1]
+                        && actual[0] == candidatesStart + shown.length()) {
+                    // The editor put this word elsewhere than expected (it dropped or changed an
+                    // earlier edit without a report): follow it.
+                    composingStart = candidatesStart;
+                    selStart = selEnd = actual[0];
+                    composingReported = true;
+                    notifyChanged();
+                    return;
+                }
                 ns = actual[0];
                 ne = actual[1];
             } else if (isBelatedExpectedUpdate(os, oe, ns, ne)) {
@@ -680,6 +728,36 @@ public final class InputLogic {
             editor.finishComposingText();
         }
         notifyChanged();
+    }
+
+    /**
+     * The editor's current selection, or null when it cannot be read cheaply: a report showing a
+     * long selection would make the read carry all of it.
+     */
+    private int[] readSelection(int reportedStart, int reportedEnd) {
+        if (reportedEnd - reportedStart > MAX_READ_SELECTION) return null;
+        int[] actual = editor.getSelection();
+        if (actual != null && actual[1] - actual[0] > MAX_READ_SELECTION) return null;
+        return actual;
+    }
+
+    private CharSequence textBefore(int n) {
+        CharSequence before = editor.getTextBeforeCursor(n);
+        return before == null ? "" : before;
+    }
+
+    /** Remembers where the word that stops composing now was composing. */
+    private void rememberComposingStart() {
+        if (composingStart < 0) return;
+        System.arraycopy(pastComposingStarts, 0, pastComposingStarts, 1, pastComposingStarts.length - 1);
+        pastComposingStarts[0] = composingStart;
+    }
+
+    private boolean isPastComposingStart(int start) {
+        for (int p : pastComposingStarts) {
+            if (p == start) return true;
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------- internals
@@ -807,6 +885,7 @@ public final class InputLogic {
         editor.commitText(text);
         word.setLength(0);
         wordAttached = false;
+        rememberComposingStart();
         composingStart = -1;
         selStart = selEnd = base >= 0 ? base + text.length() : -1;
         if (replacement != null && !text.isEmpty()) {

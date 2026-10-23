@@ -15,8 +15,6 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowInsetsController;
 import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.ExtractedText;
-import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.SurroundingText;
@@ -386,19 +384,17 @@ public final class SwagKeysService extends InputMethodService
 
         @Override
         public int[] getSelection() {
+            // Only getSurroundingText with nothing around the selection is cheap; before API 31
+            // the alternative (getExtractedText) copies the whole text, so the caller does
+            // without.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null;
             InputConnection ic = getCurrentInputConnection();
             if (ic == null) return null;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                SurroundingText st = ic.getSurroundingText(0, 0, 0);
-                // The offset is -1 when the editor does not know where the text starts.
-                if (st != null && st.getOffset() >= 0) {
-                    return ordered(st.getOffset() + st.getSelectionStart(),
-                            st.getOffset() + st.getSelectionEnd());
-                }
-            }
-            ExtractedText et = ic.getExtractedText(new ExtractedTextRequest(), 0);
-            if (et == null || et.selectionStart < 0 || et.selectionEnd < 0) return null;
-            return ordered(et.startOffset + et.selectionStart, et.startOffset + et.selectionEnd);
+            SurroundingText st = ic.getSurroundingText(0, 0, 0);
+            // The offset is -1 when the editor does not know where the text starts.
+            if (st == null || st.getOffset() < 0) return null;
+            return ordered(st.getOffset() + st.getSelectionStart(),
+                    st.getOffset() + st.getSelectionEnd());
         }
 
         private int[] ordered(int a, int b) {

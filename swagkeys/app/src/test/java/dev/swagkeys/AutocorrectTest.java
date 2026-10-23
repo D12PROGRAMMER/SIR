@@ -305,6 +305,12 @@ public class AutocorrectTest {
 
     /** Types with the editor's selection updates {@code lag} keystrokes late. */
     private void typeLagged(String s, int lag) {
+        typeKeepingLag(s, lag);
+        editor.deliverUpdates();
+    }
+
+    /** As {@link #typeLagged}, leaving the last {@code lag} updates undelivered. */
+    private void typeKeepingLag(String s, int lag) {
         for (int i = 0; i < s.length(); ) {
             int cp = s.codePointAt(i);
             i += Character.charCount(cp);
@@ -312,7 +318,6 @@ public class AutocorrectTest {
             else logic.onCodePoint(cp);
             editor.deliverAllBut(lag);
         }
-        editor.deliverUpdates();
     }
 
     @Test
@@ -457,6 +462,69 @@ public class AutocorrectTest {
         editor.deliverUpdates();
         type("x");
         assertEquals("xab teh cd", editor.value());
+    }
+
+    @Test
+    public void wordDeleteInAnEditorThatDefersBatches() {
+        startWith("see you ");
+        editor.deferBatch = true;
+        type("tomorrow");
+        logic.deleteWords(2);
+        editor.deliverUpdates();
+        assertEquals("see ", editor.value());
+    }
+
+    @Test
+    public void ownLateFinishReportDoesNotEndTheNextWord() {
+        startWith("hi there");
+        type("h");
+        editor.userMoveCursor(5);
+        // Only the tap is reported in time; the IME's own finishComposingText report lags.
+        editor.deliverOne();
+        typeKeepingLag("<i", 2);
+        editor.deliverUpdates();
+        logic.deleteWords(1);
+        editor.deliverUpdates();
+        assertEquals("hi tereh", editor.value());
+    }
+
+    @Test
+    public void typingAfterSlidingAwayFromAComposingWord() {
+        startWith("ok ");
+        type("x");
+        logic.moveCursor(-1);
+        // Neither the end of composing nor the arrow is reported before the next letter.
+        logic.onCodePoint('t');
+        editor.deliverUpdates();
+        type("eh ");
+        assertEquals("ok the x", editor.value());
+        assertEquals("teh", logic.undoableWord());
+    }
+
+    @Test
+    public void undoNotOfferedAfterTapWhileArrowReportsLag() {
+        start(true, true, TextStyle.NORMAL);
+        editor.appSetText("so ok");
+        logic.startInput(new FieldConfig(FieldConfig.Mode.STYLED, FieldConfig.Layout.TEXT,
+                true, true, CAP_SENTENCES_TYPE, false, ACTION_NONE, ACTION_NONE, null, 5, 5));
+        editor.deliverUpdates();
+        logic.moveCursor(-2);
+        typeKeepingLag("hi,", 4);
+        editor.userMoveCursor(0);
+        editor.deliverUpdates();
+        assertEquals("so yo,ok", editor.value());
+        assertNull(logic.undoableWord());
+    }
+
+    @Test
+    public void wordAfterAnEditTheEditorRejectedSilently() {
+        startWith("hi ");
+        editor.rejectSupplementary = true;
+        logic.onEmoji("\uD83D\uDE00");
+        editor.deliverUpdates();
+        type("teh ");
+        assertEquals("hi the ", editor.value());
+        assertEquals("teh", logic.undoableWord());
     }
 
     /** Starts a chat field holding {@code text}, cursor at its end. */

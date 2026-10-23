@@ -4,7 +4,7 @@ Android input method with a Nothing OS look: dot-matrix labels (Doto typeface), 
 surfaces, a red accent. Text styles are applied as you type, typos are fixed without touching
 capitalization, and finished words can be swapped for slang automatically.
 
-Prebuilt APK: [`dist/SwagKeys-1.3.0.apk`](dist/SwagKeys-1.3.0.apk) (Android 8.0 / API 26 or later,
+Prebuilt APK: [`dist/SwagKeys-1.3.1.apk`](dist/SwagKeys-1.3.1.apk) (Android 8.0 / API 26 or later,
 signed with a debug key; installs over earlier versions).
 
 ## Install
@@ -28,6 +28,12 @@ signed with a debug key; installs over earlier versions).
 | Where slang applies | Automatically in chat-style fields (multi-line or auto-correct). In single-line search, name and address fields it is only offered in the strip (tap to apply). Never in passwords, URLs, e-mail, number fields, or in words glued to other text (`#tags`, `@names`, `a.b`, `a_b`). |
 | Keyboard | Multi-touch roll-over, one-shot / double-tap / long-press shift, long-press top row for digits, key repeat on delete, symbol and number pads, editor-action Enter key, TalkBack support (explore by touch, lift to type). Switch keyboards by long-pressing the emoji key (next keyboard) or the space bar (picker). |
 | Font | Bundled: Doto (SIL OFL 1.1). Any `.ttf`/`.otf` can be imported in settings. |
+
+Known limitations: editors report cursor moves asynchronously, so when a report is ambiguous
+(late, or merged with others) the keyboard reads the editor's current selection
+(`getSurroundingText`, Android 12+; older versions and editors that cannot tell use the AOSP
+keyboard's heuristic). Apps whose input filters strip the composing span (a filter returning a
+plain `String`) make the word being typed appear twice, as with other composing keyboards.
 
 Nothing's own NDot typefaces are licensed for Nothing brand use only, so they are not bundled.
 The emoji list is regenerated with `python3 tools/build_emoji.py emoji-test.txt app/src/main/assets/emoji.txt`
